@@ -1,0 +1,151 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %leader;
+    .reg .b32 %t, %row, %index, %lane, %warp, %smem, %sp, %so;
+    .reg .b32 %xp<2>, %wp<2>, %hx<4>, %hw<4>, %out<4>;
+    .reg .b16 %xb<4>, %wb<4>, %xh<8>, %wh<8>;
+    .reg .b64 %xbase, %wbase, %obase, %offset, %ooffset, %xa, %wa, %oa;
+    .reg .f32 %x<8>, %w<8>, %s<4>, %sum, %tmp, %inv;
+
+    // One CTA owns a full row; 512 threads each process eight adjacent elements.
+    // All 4096 elements are in bounds, so no tail mask is needed.
+    ld.param.u64 %xbase, [x_ptr];
+    ld.param.u64 %wbase, [weight_ptr];
+    ld.param.u64 %obase, [output_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %row, %ctaid.x;
+    shl.b32 %index, %row, 12;
+    mad.lo.u32 %index, %t, 8, %index;
+    cvt.u64.u32 %offset, %index;
+    shl.b64 %ooffset, %offset, 1;
+    add.u64 %xa, %xbase, %offset;
+    add.u64 %wa, %wbase, %offset;
+    add.u64 %oa, %obase, %ooffset;
+
+    // Load packed FP8 data and retain the weights while reducing the row.
+    ld.global.v2.u32 {%xp0, %xp1}, [%xa];
+    ld.global.v2.u32 {%wp0, %wp1}, [%wa];
+    mov.b32 {%xb0, %xb1}, %xp0;
+    mov.b32 {%xb2, %xb3}, %xp1;
+    cvt.rn.f16x2.e4m3x2 %hx0, %xb0;
+    cvt.rn.f16x2.e4m3x2 %hx1, %xb1;
+    cvt.rn.f16x2.e4m3x2 %hx2, %xb2;
+    cvt.rn.f16x2.e4m3x2 %hx3, %xb3;
+    mov.b32 {%xh0, %xh1}, %hx0;
+    mov.b32 {%xh2, %xh3}, %hx1;
+    mov.b32 {%xh4, %xh5}, %hx2;
+    mov.b32 {%xh6, %xh7}, %hx3;
+    cvt.f32.f16 %x0, %xh0;
+    cvt.f32.f16 %x1, %xh1;
+    cvt.f32.f16 %x2, %xh2;
+    cvt.f32.f16 %x3, %xh3;
+    cvt.f32.f16 %x4, %xh4;
+    cvt.f32.f16 %x5, %xh5;
+    cvt.f32.f16 %x6, %xh6;
+    cvt.f32.f16 %x7, %xh7;
+
+    // Form four independent square sums, then reduce all 32 lanes of each warp.
+    mul.f32 %s0, %x0, %x0;
+    mul.f32 %s1, %x2, %x2;
+    mul.f32 %s2, %x4, %x4;
+    mul.f32 %s3, %x6, %x6;
+    fma.rn.f32 %s0, %x1, %x1, %s0;
+    fma.rn.f32 %s1, %x3, %x3, %s1;
+    fma.rn.f32 %s2, %x5, %x5, %s2;
+    fma.rn.f32 %s3, %x7, %x7, %s3;
+    add.f32 %s0, %s0, %s1;
+    add.f32 %s2, %s2, %s3;
+    add.f32 %sum, %s0, %s2;
+    shfl.sync.bfly.b32 %tmp, %sum, 16, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    shfl.sync.bfly.b32 %tmp, %sum, 8, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    shfl.sync.bfly.b32 %tmp, %sum, 4, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    shfl.sync.bfly.b32 %tmp, %sum, 2, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    shfl.sync.bfly.b32 %tmp, %sum, 1, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+
+    // Use exactly 16 shared floats, one per warp, within the 64-byte allocation.
+    mov.u32 %smem, global_smem;
+    and.b32 %lane, %t, 31;
+    shr.u32 %warp, %t, 5;
+    mad.lo.u32 %sp, %warp, 4, %smem;
+    setp.eq.u32 %leader, %lane, 0;
+    @%leader st.shared.f32 [%sp], %sum;
+    bar.sync 0;
+
+    // Load four shared partials per lane and reduce four groups without another barrier.
+    and.b32 %so, %lane, 3;
+    mad.lo.u32 %sp, %so, 16, %smem;
+    ld.shared.v4.f32 {%s0, %s1, %s2, %s3}, [%sp];
+    add.f32 %s0, %s0, %s1;
+    add.f32 %s2, %s2, %s3;
+    add.f32 %sum, %s0, %s2;
+    shfl.sync.bfly.b32 %tmp, %sum, 2, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    shfl.sync.bfly.b32 %tmp, %sum, 1, 31, 0xffffffff;
+    add.f32 %sum, %sum, %tmp;
+    // Compute rsqrt(sum / 4096 + 1e-6) in FP32.
+    fma.rn.f32 %inv, %sum, 0f39800000, 0f358637bd;
+    rsqrt.approx.f32 %inv, %inv;
+
+    // Decode the row-specific FP8 weights exactly to FP32.
+    mov.b32 {%wb0, %wb1}, %wp0;
+    mov.b32 {%wb2, %wb3}, %wp1;
+    cvt.rn.f16x2.e4m3x2 %hw0, %wb0;
+    cvt.rn.f16x2.e4m3x2 %hw1, %wb1;
+    cvt.rn.f16x2.e4m3x2 %hw2, %wb2;
+    cvt.rn.f16x2.e4m3x2 %hw3, %wb3;
+    mov.b32 {%wh0, %wh1}, %hw0;
+    mov.b32 {%wh2, %wh3}, %hw1;
+    mov.b32 {%wh4, %wh5}, %hw2;
+    mov.b32 {%wh6, %wh7}, %hw3;
+    cvt.f32.f16 %w0, %wh0;
+    cvt.f32.f16 %w1, %wh1;
+    cvt.f32.f16 %w2, %wh2;
+    cvt.f32.f16 %w3, %wh3;
+    cvt.f32.f16 %w4, %wh4;
+    cvt.f32.f16 %w5, %wh5;
+    cvt.f32.f16 %w6, %wh6;
+    cvt.f32.f16 %w7, %wh7;
+
+    // Preserve the FP32 multiply order before rounding each output to FP16.
+    mul.f32 %x0, %x0, %inv;
+    mul.f32 %x1, %x1, %inv;
+    mul.f32 %x2, %x2, %inv;
+    mul.f32 %x3, %x3, %inv;
+    mul.f32 %x4, %x4, %inv;
+    mul.f32 %x5, %x5, %inv;
+    mul.f32 %x6, %x6, %inv;
+    mul.f32 %x7, %x7, %inv;
+    mul.f32 %x0, %x0, %w0;
+    mul.f32 %x1, %x1, %w1;
+    mul.f32 %x2, %x2, %w2;
+    mul.f32 %x3, %x3, %w3;
+    mul.f32 %x4, %x4, %w4;
+    mul.f32 %x5, %x5, %w5;
+    mul.f32 %x6, %x6, %w6;
+    mul.f32 %x7, %x7, %w7;
+
+    // Round adjacent outputs to FP16 and write all eight with one vector store.
+    cvt.rn.f16x2.f32 %out0, %x1, %x0;
+    cvt.rn.f16x2.f32 %out1, %x3, %x2;
+    cvt.rn.f16x2.f32 %out2, %x5, %x4;
+    cvt.rn.f16x2.f32 %out3, %x7, %x6;
+    st.global.v4.u32 [%oa], {%out0, %out1, %out2, %out3};
+    ret;
+}

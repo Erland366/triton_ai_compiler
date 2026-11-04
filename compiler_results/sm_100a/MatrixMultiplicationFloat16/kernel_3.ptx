@@ -1,0 +1,335 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 a_ptr,
+    .param .u64 b_ptr,
+    .param .u64 c_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<12>;
+    .reg .b32 %r<80>;
+    .reg .b64 %rd<30>;
+    .reg .f32 %f<32>;
+    .reg .b32 %h<16>;
+
+    // Locate the 256 by 256 output tile using the fixed byte strides.
+    ld.param.u64 %rd0, [a_ptr];
+    ld.param.u64 %rd1, [b_ptr];
+    ld.param.u64 %rd2, [c_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    mov.u32 %r3, global_smem;
+    shl.b32 %r4, %r1, 21;
+    cvt.u64.u32 %rd3, %r4;
+    add.u64 %rd0, %rd0, %rd3;
+    add.u64 %rd2, %rd2, %rd3;
+    shl.b32 %r5, %r2, 9;
+    cvt.u64.u32 %rd3, %r5;
+    add.u64 %rd1, %rd1, %rd3;
+    add.u64 %rd2, %rd2, %rd3;
+
+    // Five 32768-byte stages occupy bytes 0 through 163839.
+    // Barriers and the allocation slot end at byte 163924, within the budget.
+    add.u32 %r6, %r3, 163840;
+    add.u32 %r7, %r3, 163880;
+
+    // Initialize private tensor-map scratch in shared and output memory.
+    setp.eq.u32 %p0, %r0, 0;
+    setp.lt.u32 %p1, %r0, 32;
+    @!%p1 bra MAP_ZERO_DONE;
+    shl.b32 %r70, %r0, 3;
+    add.u32 %r71, %r70, %r3;
+    cvt.u64.u32 %rd24, %r70;
+    add.u64 %rd24, %rd24, %rd2;
+    mov.b32 %r72, 0;
+    st.shared.v2.b32 [%r71], {%r72, %r72};
+    st.global.v2.b32 [%rd24], {%r72, %r72};
+MAP_ZERO_DONE:
+    bar.sync 0;
+    @!%p0 bra MAPS_BUILT;
+    add.u32 %r60, %r3, 128;
+    mov.b64 %rd26, 8192;
+
+    // A tensor map: 256 rows of 32 half values, with 64-byte swizzling.
+    tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%r3], %rd0;
+    tensormap.replace.tile.rank.shared::cta.b1024.b32 [%r3], 1;
+    tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [%r3], 0, 32;
+    tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [%r3], 1, 256;
+    tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%r3], 0, 4096;
+    tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%r3], 1, 256;
+    tensormap.replace.tile.global_stride.shared::cta.b1024.b64 [%r3], 0, %rd26;
+    tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [%r3], 0, 1;
+    tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [%r3], 1, 1;
+    tensormap.replace.tile.elemtype.shared::cta.b1024.b32 [%r3], 6;
+    tensormap.replace.tile.interleave_layout.shared::cta.b1024.b32 [%r3], 0;
+    tensormap.replace.tile.swizzle_mode.shared::cta.b1024.b32 [%r3], 2;
+    tensormap.replace.tile.swizzle_atomicity.shared::cta.b1024.b32 [%r3], 0;
+    tensormap.replace.tile.fill_mode.shared::cta.b1024.b32 [%r3], 0;
+
+    // B tensor map: four swizzled 64-column slabs in a single copy.
+    tensormap.replace.tile.global_address.shared::cta.b1024.b64 [%r60], %rd1;
+    tensormap.replace.tile.rank.shared::cta.b1024.b32 [%r60], 2;
+    tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [%r60], 0, 64;
+    tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [%r60], 1, 32;
+    tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%r60], 0, 64;
+    tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%r60], 1, 4096;
+    tensormap.replace.tile.global_stride.shared::cta.b1024.b64 [%r60], 0, %rd26;
+    tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [%r60], 0, 1;
+    tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [%r60], 1, 1;
+    mov.u64 %rd27, 128;
+    tensormap.replace.tile.global_dim.shared::cta.b1024.b32 [%r60], 2, 4;
+    tensormap.replace.tile.box_dim.shared::cta.b1024.b32 [%r60], 2, 4;
+    tensormap.replace.tile.element_stride.shared::cta.b1024.b32 [%r60], 2, 1;
+    tensormap.replace.tile.global_stride.shared::cta.b1024.b64 [%r60], 1, %rd27;
+    tensormap.replace.tile.elemtype.shared::cta.b1024.b32 [%r60], 6;
+    tensormap.replace.tile.interleave_layout.shared::cta.b1024.b32 [%r60], 0;
+    tensormap.replace.tile.swizzle_mode.shared::cta.b1024.b32 [%r60], 3;
+    tensormap.replace.tile.swizzle_atomicity.shared::cta.b1024.b32 [%r60], 0;
+    tensormap.replace.tile.fill_mode.shared::cta.b1024.b32 [%r60], 0;
+
+    // Initialize five ready/free barrier pairs beyond the input buffers.
+    mov.u32 %r10, %r6;
+    mov.u32 %r11, %r7;
+    mov.u32 %r12, 0;
+INIT_LOOP:
+    mbarrier.init.shared::cta.b64 [%r10], 1;
+    mbarrier.init.shared::cta.b64 [%r11], 1;
+    add.u32 %r10, %r10, 8;
+    add.u32 %r11, %r11, 8;
+    add.u32 %r12, %r12, 1;
+    setp.lt.u32 %p2, %r12, 5;
+    @%p2 bra INIT_LOOP;
+MAPS_BUILT:
+    bar.sync 0;
+    add.u32 %r60, %r3, 128;
+    add.u64 %rd21, %rd2, 128;
+    add.u32 %r73, %r3, 163920;
+    @!%p1 bra MAPS_PUBLISHED;
+
+    // Publish the maps and allocate two 128 by 256 FP32 accumulator tiles.
+    tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.cta.sync.aligned [%rd2], [%r3], 128;
+    tensormap.cp_fenceproxy.global.shared::cta.tensormap::generic.release.cta.sync.aligned [%rd21], [%r60], 128;
+    tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r73], 512;
+    tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+MAPS_PUBLISHED:
+    bar.sync 0;
+    ld.shared.u32 %r8, [%r73];
+    add.u32 %r9, %r8, 256;
+    bar.sync 0;
+
+    // Separate the TMA producer from the tensor-core issuing warp.
+    setp.eq.u32 %p2, %r0, 32;
+    @%p2 bra PRODUCER;
+    @%p0 bra CONSUMER;
+    bra JOIN;
+
+PRODUCER:
+    // Acquire the published maps before issuing asynchronous tensor copies.
+    fence.proxy.tensormap::generic.acquire.cta [%rd2], 128;
+    fence.proxy.tensormap::generic.acquire.cta [%rd21], 128;
+    fence.proxy.async.shared::cta;
+    mov.u32 %r61, 0;
+    mov.u32 %r62, 0;
+    mov.u32 %r20, 0;
+    mov.u32 %r21, 0;
+    mov.u32 %r25, %r6;
+    mov.u32 %r26, %r7;
+    mov.u32 %r27, 1;
+    mov.u32 %r28, 0;
+PRODUCE_LOOP:
+    // Initially stages are free; later wait until their MMA reads finish.
+    setp.lt.u32 %p2, %r21, 5;
+    @%p2 bra STAGE_FREE;
+WAIT_FREE:
+    mbarrier.try_wait.parity.shared::cta.b64 %p3, [%r26], %r27;
+    @!%p3 bra WAIT_FREE;
+STAGE_FREE:
+    // Each original K=64 step uses two K=32 stages, with no boundary padding.
+    mbarrier.arrive.expect_tx.shared::cta.b64 %rd25, [%r25], 32768;
+    add.u32 %r66, %r3, %r20;
+    cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes [%r66], [%rd2, {%r61, %r62}], [%r25];
+    add.u32 %r66, %r66, 16384;
+    cp.async.bulk.tensor.3d.shared::cta.global.mbarrier::complete_tx::bytes [%r66], [%rd21, {%r62, %r61, %r62}], [%r25];
+
+    // Advance the producer through the five-stage ring.
+    add.u32 %r61, %r61, 32;
+    add.u32 %r20, %r20, 32768;
+    add.u32 %r25, %r25, 8;
+    add.u32 %r26, %r26, 8;
+    add.u32 %r28, %r28, 1;
+    setp.eq.u32 %p2, %r28, 5;
+    @!%p2 bra PRODUCER_NEXT;
+    mov.u32 %r20, 0;
+    mov.u32 %r25, %r6;
+    mov.u32 %r26, %r7;
+    mov.u32 %r28, 0;
+    xor.b32 %r27, %r27, 1;
+PRODUCER_NEXT:
+    add.u32 %r21, %r21, 1;
+    setp.lt.u32 %p2, %r21, 128;
+    @%p2 bra PRODUCE_LOOP;
+    bra JOIN;
+
+CONSUMER:
+    // Precompute shared descriptors and advance only their start addresses.
+    mov.u32 %r20, 0;
+    mov.u32 %r21, 0;
+    mov.u32 %r25, %r6;
+    mov.u32 %r26, %r7;
+    mov.u32 %r27, 0;
+    mov.u32 %r28, 0;
+    mov.u32 %r32, 0x08410010;
+    mov.u32 %r30, %r3;
+    shr.u32 %r31, %r30, 4;
+    cvt.u64.u32 %rd10, %r31;
+    or.b64 %rd10, %rd10, 0x8000402000010000;
+    add.u64 %rd11, %rd10, 512;
+    add.u32 %r30, %r30, 16384;
+    shr.u32 %r31, %r30, 4;
+    cvt.u64.u32 %rd12, %r31;
+    or.b64 %rd12, %rd12, 0x4000404001000000;
+    setp.ne.u32 %p4, %r0, 0;
+    mov.b64 %rd13, %rd10;
+    mov.b64 %rd14, %rd11;
+    mov.b64 %rd15, %rd12;
+CONSUME_LOOP:
+WAIT_READY:
+    // Wait for both operands of this half-step to reach shared memory.
+    mbarrier.try_wait.parity.shared::cta.b64 %p3, [%r25], %r27;
+    @!%p3 bra WAIT_READY;
+    tcgen05.fence::after_thread_sync;
+
+    // Accumulate two ordered K=16 steps into each 128-row output half.
+    // The first pair initializes the FP32 accumulators without reading them.
+    tcgen05.mma.cta_group::1.kind::f16 [%r8], %rd10, %rd12, %r32, %p4;
+    tcgen05.mma.cta_group::1.kind::f16 [%r9], %rd11, %rd12, %r32, %p4;
+    add.u64 %rd10, %rd10, 2;
+    add.u64 %rd11, %rd11, 2;
+    add.u64 %rd12, %rd12, 128;
+    setp.eq.u32 %p4, %r0, 0;
+    tcgen05.mma.cta_group::1.kind::f16 [%r8], %rd10, %rd12, %r32, %p4;
+    tcgen05.mma.cta_group::1.kind::f16 [%r9], %rd11, %rd12, %r32, %p4;
+
+    // Return the stage to the producer after its tensor-core reads complete.
+    tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r26];
+    add.u64 %rd10, %rd10, 2046;
+    add.u64 %rd11, %rd11, 2046;
+    add.u64 %rd12, %rd12, 1920;
+    add.u32 %r25, %r25, 8;
+    add.u32 %r26, %r26, 8;
+    add.u32 %r28, %r28, 1;
+    setp.eq.u32 %p2, %r28, 5;
+    @!%p2 bra CONSUMER_NEXT;
+    mov.b64 %rd10, %rd13;
+    mov.b64 %rd11, %rd14;
+    mov.b64 %rd12, %rd15;
+    mov.u32 %r25, %r6;
+    mov.u32 %r26, %r7;
+    mov.u32 %r28, 0;
+    xor.b32 %r27, %r27, 1;
+CONSUMER_NEXT:
+    add.u32 %r21, %r21, 1;
+    setp.lt.u32 %p2, %r21, 128;
+    @%p2 bra CONSUME_LOOP;
+
+    // The last half-step uses stage two at odd parity; drain its final MMA.
+    add.u32 %r26, %r7, 16;
+WAIT_FINAL:
+    mbarrier.try_wait.parity.shared::cta.b64 %p3, [%r26], 1;
+    @!%p3 bra WAIT_FINAL;
+JOIN:
+    bar.sync 0;
+
+    // Assign tensor-memory rows to all eight warps for the epilogue.
+    tcgen05.fence::after_thread_sync;
+    and.b32 %r40, %r0, 96;
+    shl.b32 %r40, %r40, 16;
+    shr.u32 %r41, %r0, 7;
+    shl.b32 %r41, %r41, 8;
+    add.u32 %r40, %r40, %r41;
+    add.u32 %r40, %r40, %r8;
+    shl.b32 %r42, %r0, 9;
+    and.b32 %r43, %r0, 7;
+    shl.b32 %r43, %r43, 4;
+    xor.b32 %r42, %r42, %r43;
+    add.u32 %r42, %r42, %r3;
+    mov.u32 %r44, 0;
+EPILOGUE_STAGE:
+    // Read 32 accumulator columns per lane and round pairs to FP16.
+    tcgen05.ld.sync.aligned.32x32b.x32.b32 {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7, %f8, %f9, %f10, %f11, %f12, %f13, %f14, %f15, %f16, %f17, %f18, %f19, %f20, %f21, %f22, %f23, %f24, %f25, %f26, %f27, %f28, %f29, %f30, %f31}, [%r40];
+    tcgen05.wait::ld.sync.aligned;
+    cvt.rn.f16x2.f32 %h0, %f1, %f0;
+    cvt.rn.f16x2.f32 %h1, %f3, %f2;
+    cvt.rn.f16x2.f32 %h2, %f5, %f4;
+    cvt.rn.f16x2.f32 %h3, %f7, %f6;
+    cvt.rn.f16x2.f32 %h4, %f9, %f8;
+    cvt.rn.f16x2.f32 %h5, %f11, %f10;
+    cvt.rn.f16x2.f32 %h6, %f13, %f12;
+    cvt.rn.f16x2.f32 %h7, %f15, %f14;
+    cvt.rn.f16x2.f32 %h8, %f17, %f16;
+    cvt.rn.f16x2.f32 %h9, %f19, %f18;
+    cvt.rn.f16x2.f32 %h10, %f21, %f20;
+    cvt.rn.f16x2.f32 %h11, %f23, %f22;
+    cvt.rn.f16x2.f32 %h12, %f25, %f24;
+    cvt.rn.f16x2.f32 %h13, %f27, %f26;
+    cvt.rn.f16x2.f32 %h14, %f29, %f28;
+    cvt.rn.f16x2.f32 %h15, %f31, %f30;
+
+    // Reuse the retired input buffers for swizzled output redistribution.
+    xor.b32 %r45, %r42, %r44;
+    st.shared.v4.b32 [%r45], {%h0, %h1, %h2, %h3};
+    xor.b32 %r45, %r45, 16;
+    st.shared.v4.b32 [%r45], {%h4, %h5, %h6, %h7};
+    xor.b32 %r45, %r45, 48;
+    st.shared.v4.b32 [%r45], {%h8, %h9, %h10, %h11};
+    xor.b32 %r45, %r45, 16;
+    st.shared.v4.b32 [%r45], {%h12, %h13, %h14, %h15};
+    add.u32 %r40, %r40, 32;
+    add.u32 %r44, %r44, 64;
+    setp.lt.u32 %p6, %r44, 512;
+    @%p6 bra EPILOGUE_STAGE;
+    bar.sync 0;
+
+    // Map contiguous output vectors to threads for coalesced global stores.
+    shl.b32 %r46, %r0, 4;
+    shr.u32 %r48, %r46, 9;
+    and.b32 %r49, %r46, 511;
+    shl.b32 %r50, %r48, 13;
+    add.u32 %r50, %r50, %r49;
+    cvt.u64.u32 %rd20, %r50;
+    add.u64 %rd20, %rd20, %rd2;
+    and.b32 %r51, %r48, 7;
+    shl.b32 %r51, %r51, 4;
+    xor.b32 %r51, %r46, %r51;
+    add.u32 %r51, %r51, %r3;
+    mov.u32 %r47, 0;
+EPILOGUE_STORE:
+    // Cover all 65536 output elements and overwrite the temporary tensor maps.
+    ld.shared.v4.b32 {%h0, %h1, %h2, %h3}, [%r51];
+    ld.shared.v4.b32 {%h4, %h5, %h6, %h7}, [%r51+4096];
+    ld.shared.v4.b32 {%h8, %h9, %h10, %h11}, [%r51+8192];
+    ld.shared.v4.b32 {%h12, %h13, %h14, %h15}, [%r51+12288];
+    st.global.v4.b32 [%rd20], {%h0, %h1, %h2, %h3};
+    st.global.v4.b32 [%rd20+65536], {%h4, %h5, %h6, %h7};
+    st.global.v4.b32 [%rd20+131072], {%h8, %h9, %h10, %h11};
+    st.global.v4.b32 [%rd20+196608], {%h12, %h13, %h14, %h15};
+    add.u32 %r51, %r51, 16384;
+    add.u64 %rd20, %rd20, 262144;
+    add.u32 %r47, %r47, 1;
+    setp.lt.u32 %p6, %r47, 8;
+    @%p6 bra EPILOGUE_STORE;
+
+    // Release tensor memory only after every reader has finished.
+    bar.sync 0;
+    @!%p1 bra DONE;
+    tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r8, 512;
+DONE:
+    ret;
+}

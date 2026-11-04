@@ -1,0 +1,33 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<5>;\n    .reg .b64 %rd<7>;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<24>;\n\n    // Map 128 threads to adjacent pairs covering the full 256-element tile.\n    ld.param.u64 %rd0, [x_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    mad.lo.u32 %r2, %r0, 128, %r1;\n    mul.wide.u32 %rd2, %r2, 4;\n    add.u64 %rd3, %rd0, %rd2;\n    add.u64 %rd4, %rd1, %rd2;\n\n    // Load the unmasked pair and promote both half values to float.\n    ld.global.b32 %r3, [%rd3];\n    mov.b32 {%h0, %h1}, %r3;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f12, %h1;\n\n    // Evaluate an erf approximation using a reciprocal polynomial and exponential.\n    mul.f32 %f1, %f0, 0f3F3504F3;\n    abs.f32 %f2, %f1;\n    fma.rn.f32 %f3, %f2, 0f3EA7BA05, 0f3F800000;\n    rcp.approx.ftz.f32 %f3, %f3;\n    fma.rn.f32 %f4, %f3, 0f3F87DC22, 0fBFBA00E3;\n    fma.rn.f32 %f4, %f4, %f3, 0f3FB5F0E3;\n    fma.rn.f32 %f4, %f4, %f3, 0fBE91A98E;\n    fma.rn.f32 %f4, %f4, %f3, 0f3E827906;\n    mul.f32 %f4, %f4, %f3;\n    mul.f32 %f5, %f1, %f1;\n    mul.f32 %f5, %f5, 0fBFB8AA3B;\n    ex2.approx.ftz.f32 %f5, %f5;\n    fma.rn.f32 %f6, %f4, %f5, 0fBF800000;\n    neg.f32 %f6, %f6;\n\n    // Restore the erf sign and compute 0.5*x*(1+erf(x/sqrt(2))).\n    copysign.f32 %f6, %f0, %f6;\n    add.f32 %f6, %f6, 0f3F800000;\n    mul.f32 %f7, %f0, 0f3F000000;\n    mul.f32 %f7, %f7, %f6;\n\n    // Evaluate the same erf approximation for the second element.\n    mul.f32 %f13, %f12, 0f3F3504F3;\n    abs.f32 %f14, %f13;\n    fma.rn.f32 %f15, %f14, 0f3EA7BA05, 0f3F800000;\n    rcp.approx.ftz.f32 %f15, %f15;\n    fma.rn.f32 %f16, %f15, 0f3F87DC22, 0fBFBA00E3;\n    fma.rn.f32 %f16, %f16, %f15, 0f3FB5F0E3;\n    fma.rn.f32 %f16, %f16, %f15, 0fBE91A98E;\n    fma.rn.f32 %f16, %f16, %f15, 0f3E827906;\n    mul.f32 %f16, %f16, %f15;\n    mul.f32 %f17, %f13, %f13;\n    mul.f32 %f17, %f17, 0fBFB8AA3B;\n    ex2.approx.ftz.f32 %f17, %f17;\n    fma.rn.f32 %f18, %f16, %f17, 0fBF800000;\n    neg.f32 %f18, %f18;\n\n    // Restore the second erf sign and complete its GELU calculation.\n    copysign.f32 %f18, %f12, %f18;\n    add.f32 %f18, %f18, 0f3F800000;\n    mul.f32 %f19, %f12, 0f3F000000;\n    mul.f32 %f19, %f19, %f18;\n\n    // Round both results to half and store them as one packed word.\n    cvt.rn.f16.f32 %h2, %f7;\n    cvt.rn.f16.f32 %h3, %f19;\n    mov.b32 %r4, {%h2, %h3};\n    st.global.b32 [%rd4], %r4;\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "Initial verification failed with reversed copysign operands; corrected operand order passed."
+  ],
+  "speedup": 1.0,
+  "p50": 0.009216000325977802,
+  "autotune_metrics": {
+    "operator": "GELUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 256
+    },
+    "selected_config": {
+      "block_size": 256,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 256,
+        "num_warps": 4
+      },
+      "latency_ms": 0.018132105469703674,
+      "evaluated_configurations": 15,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.4245725
+}

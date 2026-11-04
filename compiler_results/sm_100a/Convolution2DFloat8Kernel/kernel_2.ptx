@@ -1,0 +1,354 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+ .param .u64 x_ptr,
+ .param .u64 weight_ptr,
+ .param .u64 output_ptr,
+ .param .u64 dummy_ptr1,
+ .param .u64 dummy_ptr2
+)
+{
+ .reg .pred %p<8>;
+ .reg .b32 %r<96>;
+ .reg .b64 %rd<24>;
+ .reg .f32 %f<32>;
+ .reg .b32 %g<64>;
+ .reg .b32 %h<16>;
+
+ // Locate this 128-channel by 64-pixel convolution tile.
+ ld.param.u64 %rd0, [x_ptr];
+ ld.param.u64 %rd1, [weight_ptr];
+ ld.param.u64 %rd2, [output_ptr];
+ mov.u32 %r0, %tid.x;
+ mov.u32 %r1, %ctaid.x;
+ mov.u32 %r2, %ctaid.y;
+ shl.b32 %r1, %r1, 6;
+ shl.b32 %r2, %r2, 7;
+
+ // Reserve synchronization metadata above the 32768-byte operand and cache region.
+ mov.u32 %r3, global_smem;
+ add.u32 %r4, %r3, 32768;
+ add.u32 %r5, %r3, 32776;
+ setp.eq.u32 %p0, %r0, 0;
+ setp.lt.u32 %p1, %r0, 32;
+ @%p0 mbarrier.init.shared::cta.b64 [%r4], 1;
+ @%p1 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r5], 64;
+ @%p1 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+ bar.sync 0;
+ ld.shared.u32 %r6, [%r5];
+
+ // Cache the receptive field once, using at most 320 bytes per input channel.
+ div.u32 %r64, %r1, 2916;
+ rem.u32 %r65, %r1, 2916;
+ setp.gt.u32 %p6, %r65, 2852;
+ selp.u32 %r69, 320, 208, %p6;
+ div.u32 %r68, %r65, 54;
+ mad.lo.u32 %r65, %r68, 2, %r65;
+ and.b32 %r65, %r65, 0xfffffff0;
+ sub.u32 %r68, 3136, %r65;
+ mad.lo.u32 %r70, %r64, 200704, %r65;
+ cvt.u64.u32 %rd15, %r70;
+ add.u64 %rd15, %rd0, %rd15;
+ add.u32 %r70, %r64, 1;
+ mul.lo.u32 %r70, %r70, 200704;
+ sub.u32 %r70, %r70, %r68;
+ cvt.u64.u32 %rd16, %r70;
+ add.u64 %rd16, %rd0, %rd16;
+
+ // Map two adjacent pixel pairs separately to preserve row and batch crossings.
+ and.b32 %r7, %r0, 15;
+ shl.b32 %r7, %r7, 2;
+ add.u32 %r8, %r1, %r7;
+ div.u32 %r9, %r8, 2916;
+ rem.u32 %r10, %r8, 2916;
+ div.u32 %r11, %r10, 54;
+ rem.u32 %r12, %r10, 54;
+ mad.lo.u32 %r66, %r11, 2, %r10;
+ sub.u32 %r70, %r66, %r65;
+ add.u32 %r71, %r66, %r68;
+ setp.ne.u32 %p7, %r9, %r64;
+ selp.u32 %r66, %r71, %r70, %p7;
+ add.u32 %r66, %r66, 12288;
+ add.u32 %r66, %r66, %r3;
+ add.u32 %r8, %r8, 2;
+ div.u32 %r9, %r8, 2916;
+ rem.u32 %r10, %r8, 2916;
+ div.u32 %r11, %r10, 54;
+ rem.u32 %r12, %r10, 54;
+ mad.lo.u32 %r67, %r11, 2, %r10;
+ sub.u32 %r70, %r67, %r65;
+ add.u32 %r71, %r67, %r68;
+ setp.ne.u32 %p7, %r9, %r64;
+ selp.u32 %r67, %r71, %r70, %p7;
+ add.u32 %r67, %r67, 12288;
+ add.u32 %r67, %r67, %r3;
+
+ // Two threads cooperatively copy each channel's aligned receptive-field strip.
+ shr.u32 %r70, %r0, 1;
+ and.b32 %r71, %r0, 1;
+ shl.b32 %r71, %r71, 4;
+ mad.lo.u32 %r72, %r70, 320, %r3;
+ add.u32 %r72, %r72, 12288;
+ mul.wide.u32 %rd17, %r70, 3136;
+ add.u64 %rd15, %rd15, %rd17;
+ add.u64 %rd16, %rd16, %rd17;
+RAW_COPY:
+ // Join the next batch only when needed; zero-fill unused channel-tail chunks.
+ setp.lt.u32 %p7, %r71, %r68;
+ selp.b64 %rd17, %rd15, %rd16, %p7;
+ or.pred %p7, %p7, %p6;
+ selp.u32 %r73, 16, 0, %p7;
+ cvt.u64.u32 %rd18, %r71;
+ add.u64 %rd17, %rd17, %rd18;
+ add.u32 %r74, %r72, %r71;
+ cp.async.cg.shared.global [%r74], [%rd17], 16, %r73;
+ add.u32 %r71, %r71, 32;
+ setp.lt.u32 %p7, %r71, %r69;
+ @%p7 bra RAW_COPY;
+ cp.async.commit_group;
+ cp.async.wait_group 0;
+ bar.sync 0;
+
+ // Divide coalesced weight loads across four lanes per output channel.
+ shr.u32 %r14, %r0, 2;
+ add.u32 %r15, %r14, %r2;
+ and.b32 %r16, %r0, 3;
+ shl.b32 %r16, %r16, 4;
+ mad.lo.u32 %r15, %r15, 576, %r16;
+ cvt.u64.u32 %rd5, %r15;
+ add.u64 %rd5, %rd1, %rd5;
+
+ // Apply the tensor-core 64-byte XOR swizzle to both operands.
+ shl.b32 %r17, %r14, 6;
+ add.u32 %r17, %r17, %r16;
+ shr.u32 %r18, %r17, 3;
+ and.b32 %r18, %r18, 48;
+ xor.b32 %r17, %r17, %r18;
+ add.u32 %r17, %r17, %r3;
+ shr.u32 %r20, %r0, 4;
+ mad.lo.u32 %r21, %r20, 64, %r7;
+ shr.u32 %r22, %r21, 3;
+ and.b32 %r22, %r22, 48;
+ xor.b32 %r21, %r21, %r22;
+ add.u32 %r21, %r21, 8192;
+ add.u32 %r21, %r21, %r3;
+
+ // Encode the swizzled K-major weights and MN-major inputs.
+ cvt.u64.u32 %rd6, %r3;
+ shr.u64 %rd6, %rd6, 4;
+ or.b64 %rd6, %rd6, 0x8000402000010000;
+ cvt.u64.u32 %rd7, %r3;
+ shr.u64 %rd7, %rd7, 4;
+ or.b64 %rd7, %rd7, 0x8000402001000200;
+ add.u64 %rd8, %rd6, 2;
+ add.u64 %rd9, %rd7, 128;
+ mov.u32 %r63, 0;
+ mov.u32 %r24, 0x08110010;
+ mov.u32 %r25, 0;
+ mov.u32 %r26, 0;
+K_LOOP:
+ // Asynchronously stage all 128 weight rows for this 64-value reduction block.
+ cvt.u64.u32 %rd10, %r25;
+ add.u64 %rd10, %rd5, %rd10;
+ add.u32 %r27, %r17, 0;
+ cp.async.cg.shared.global [%r27], [%rd10], 16;
+ add.u64 %rd10, %rd10, 18432;
+ add.u32 %r27, %r17, 2048;
+ cp.async.cg.shared.global [%r27], [%rd10], 16;
+ add.u64 %rd10, %rd10, 18432;
+ add.u32 %r27, %r17, 4096;
+ cp.async.cg.shared.global [%r27], [%rd10], 16;
+ add.u64 %rd10, %rd10, 18432;
+ add.u32 %r27, %r17, 6144;
+ cp.async.cg.shared.global [%r27], [%rd10], 16;
+ cp.async.commit_group;
+
+ // Gather the NCHW receptive fields in two groups of 32 reduction rows.
+ add.u32 %r29, %r25, %r20;
+ mov.u32 %r30, %r21;
+ mov.u32 %r31, 0;
+X_LOOP:
+ // For k below 576, reciprocal products exactly compute k/9 and k/3.
+ // The cached input offset is k + 152*(k/9) + 53*(k/3).
+ add.u32 %g0, %r29, 0;
+ mul.lo.u32 %g1, %g0, 7282;
+ shr.u32 %g1, %g1, 16;
+ mul.lo.u32 %g2, %g0, 21846;
+ shr.u32 %g2, %g2, 16;
+ mad.lo.u32 %g3, %g1, 152, %g0;
+ mad.lo.u32 %g3, %g2, 53, %g3;
+ add.u32 %g4, %r66, %g3;
+ add.u32 %g5, %r67, %g3;
+ ld.shared.u8 %g6, [%g4];
+ ld.shared.u8 %g7, [%g4+1];
+ ld.shared.u8 %g8, [%g5];
+ ld.shared.u8 %g9, [%g5+1];
+ prmt.b32 %g10, %g6, %g7, 0x4440;
+ prmt.b32 %g11, %g8, %g9, 0x4440;
+ prmt.b32 %g12, %g10, %g11, 0x5410;
+ st.shared.b32 [%r30+0], %g12;
+
+ // Gather and pack the next eight reduction rows.
+ add.u32 %g16, %r29, 8;
+ mul.lo.u32 %g17, %g16, 7282;
+ shr.u32 %g17, %g17, 16;
+ mul.lo.u32 %g18, %g16, 21846;
+ shr.u32 %g18, %g18, 16;
+ mad.lo.u32 %g19, %g17, 152, %g16;
+ mad.lo.u32 %g19, %g18, 53, %g19;
+ add.u32 %g20, %r66, %g19;
+ add.u32 %g21, %r67, %g19;
+ ld.shared.u8 %g22, [%g20];
+ ld.shared.u8 %g23, [%g20+1];
+ ld.shared.u8 %g24, [%g21];
+ ld.shared.u8 %g25, [%g21+1];
+ prmt.b32 %g26, %g22, %g23, 0x4440;
+ prmt.b32 %g27, %g24, %g25, 0x4440;
+ prmt.b32 %g28, %g26, %g27, 0x5410;
+ st.shared.b32 [%r30+512], %g28;
+
+ // Gather the third group into its swizzled shared-memory rows.
+ add.u32 %g32, %r29, 16;
+ mul.lo.u32 %g33, %g32, 7282;
+ shr.u32 %g33, %g33, 16;
+ mul.lo.u32 %g34, %g32, 21846;
+ shr.u32 %g34, %g34, 16;
+ mad.lo.u32 %g35, %g33, 152, %g32;
+ mad.lo.u32 %g35, %g34, 53, %g35;
+ add.u32 %g36, %r66, %g35;
+ add.u32 %g37, %r67, %g35;
+ ld.shared.u8 %g38, [%g36];
+ ld.shared.u8 %g39, [%g36+1];
+ ld.shared.u8 %g40, [%g37];
+ ld.shared.u8 %g41, [%g37+1];
+ prmt.b32 %g42, %g38, %g39, 0x4440;
+ prmt.b32 %g43, %g40, %g41, 0x4440;
+ prmt.b32 %g44, %g42, %g43, 0x5410;
+ st.shared.b32 [%r30+1024], %g44;
+
+ // Gather the fourth group, completing this 32-row input slice.
+ add.u32 %g48, %r29, 24;
+ mul.lo.u32 %g49, %g48, 7282;
+ shr.u32 %g49, %g49, 16;
+ mul.lo.u32 %g50, %g48, 21846;
+ shr.u32 %g50, %g50, 16;
+ mad.lo.u32 %g51, %g49, 152, %g48;
+ mad.lo.u32 %g51, %g50, 53, %g51;
+ add.u32 %g52, %r66, %g51;
+ add.u32 %g53, %r67, %g51;
+ ld.shared.u8 %g54, [%g52];
+ ld.shared.u8 %g55, [%g52+1];
+ ld.shared.u8 %g56, [%g53];
+ ld.shared.u8 %g57, [%g53+1];
+ prmt.b32 %g58, %g54, %g55, 0x4440;
+ prmt.b32 %g59, %g56, %g57, 0x4440;
+ prmt.b32 %g60, %g58, %g59, 0x5410;
+ st.shared.b32 [%r30+1536], %g60;
+ add.u32 %r29, %r29, 32;
+ add.u32 %r30, %r30, 2048;
+ add.u32 %r31, %r31, 1;
+ setp.lt.u32 %p2, %r31, 2;
+ @%p2 bra X_LOOP;
+
+ // Publish both operands to the asynchronous tensor-core proxy.
+ cp.async.wait_group 0;
+ fence.proxy.async.shared::cta;
+ bar.sync 0;
+
+ // Accumulate two ordered FP8 matrix products with FP32 accumulators.
+ setp.ne.u32 %p3, %r25, 0;
+ setp.eq.u32 %p4, %r0, %r0;
+ @%p0 tcgen05.mma.cta_group::1.kind::f8f6f4 [%r6], %rd6, %rd7, %r24, {%r63,%r63,%r63,%r63}, %p3;
+ @%p0 tcgen05.mma.cta_group::1.kind::f8f6f4 [%r6], %rd8, %rd9, %r24, {%r63,%r63,%r63,%r63}, %p4;
+ @%p0 tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r4];
+MMA_WAIT:
+ // Wait for operand consumption before reusing shared memory.
+ mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 %p5, [%r4], %r26;
+ @!%p5 bra MMA_WAIT;
+ xor.b32 %r26, %r26, 1;
+ add.u32 %r25, %r25, 64;
+ setp.lt.u32 %p2, %r25, 576;
+ @%p2 bra K_LOOP;
+
+ // Reuse shared memory for an FP16 epilogue with a bank-friendly 144-byte row stride.
+ tcgen05.fence::after_thread_sync;
+ shr.u32 %r44, %r0, 5;
+ shl.b32 %r45, %r44, 21;
+ add.u32 %r45, %r45, %r6;
+ mad.lo.u32 %r46, %r0, 144, %r3;
+ mov.u32 %r47, 0;
+EPI_STAGE:
+ // Read 32 accumulator columns at a time and convert with round-to-nearest-even.
+ tcgen05.ld.sync.aligned.32x32b.x32.b32 {%f0,%f1,%f2,%f3,%f4,%f5,%f6,%f7,%f8,%f9,%f10,%f11,%f12,%f13,%f14,%f15,%f16,%f17,%f18,%f19,%f20,%f21,%f22,%f23,%f24,%f25,%f26,%f27,%f28,%f29,%f30,%f31}, [%r45];
+ tcgen05.wait::ld.sync.aligned;
+ cvt.rn.f16x2.f32 %h0, %f1, %f0;
+ cvt.rn.f16x2.f32 %h1, %f3, %f2;
+ cvt.rn.f16x2.f32 %h2, %f5, %f4;
+ cvt.rn.f16x2.f32 %h3, %f7, %f6;
+ cvt.rn.f16x2.f32 %h4, %f9, %f8;
+ cvt.rn.f16x2.f32 %h5, %f11, %f10;
+ cvt.rn.f16x2.f32 %h6, %f13, %f12;
+ cvt.rn.f16x2.f32 %h7, %f15, %f14;
+ cvt.rn.f16x2.f32 %h8, %f17, %f16;
+ cvt.rn.f16x2.f32 %h9, %f19, %f18;
+ cvt.rn.f16x2.f32 %h10, %f21, %f20;
+ cvt.rn.f16x2.f32 %h11, %f23, %f22;
+ cvt.rn.f16x2.f32 %h12, %f25, %f24;
+ cvt.rn.f16x2.f32 %h13, %f27, %f26;
+ cvt.rn.f16x2.f32 %h14, %f29, %f28;
+ cvt.rn.f16x2.f32 %h15, %f31, %f30;
+
+ // Stage aligned vectors and advance to the remaining accumulator columns.
+ st.shared.v4.b32 [%r46+0], {%h0,%h1,%h2,%h3};
+ st.shared.v4.b32 [%r46+16], {%h4,%h5,%h6,%h7};
+ st.shared.v4.b32 [%r46+32], {%h8,%h9,%h10,%h11};
+ st.shared.v4.b32 [%r46+48], {%h12,%h13,%h14,%h15};
+ add.u32 %r45, %r45, 32;
+ add.u32 %r46, %r46, 64;
+ add.u32 %r47, %r47, 32;
+ setp.lt.u32 %p2, %r47, 64;
+ @%p2 bra EPI_STAGE;
+ bar.sync 0;
+
+ // Redistribute into adjacent four-pixel groups and compute contiguous NCHW addresses.
+ and.b32 %r52, %r0, 15;
+ shl.b32 %r53, %r52, 2;
+ add.u32 %r54, %r1, %r53;
+ div.u32 %r55, %r54, 2916;
+ rem.u32 %r56, %r54, 2916;
+ shr.u32 %r44, %r0, 4;
+ add.u32 %r57, %r2, %r44;
+ mad.lo.u32 %r58, %r55, 373248, %r56;
+ mad.lo.u32 %r58, %r57, 2916, %r58;
+ mul.wide.u32 %rd14, %r58, 2;
+ add.u64 %rd14, %rd2, %rd14;
+ shl.b32 %r59, %r52, 3;
+ mad.lo.u32 %r60, %r44, 144, %r59;
+ add.u32 %r60, %r60, %r3;
+ mov.u32 %r61, 0;
+EPI_STORE:
+ // Four-pixel stores never cross a batch boundary and are eight-byte aligned.
+ ld.shared.v2.b32 {%r48,%r49}, [%r60+0];
+ st.global.v2.b32 [%rd14+0], {%r48,%r49};
+ ld.shared.v2.b32 {%r48,%r49}, [%r60+1152];
+ st.global.v2.b32 [%rd14+46656], {%r48,%r49};
+ ld.shared.v2.b32 {%r48,%r49}, [%r60+2304];
+ st.global.v2.b32 [%rd14+93312], {%r48,%r49};
+ ld.shared.v2.b32 {%r48,%r49}, [%r60+3456];
+ st.global.v2.b32 [%rd14+139968], {%r48,%r49};
+ add.u32 %r60, %r60, 4608;
+ add.u64 %rd14, %rd14, 186624;
+ add.u32 %r61, %r61, 1;
+ setp.lt.u32 %p2, %r61, 4;
+ @%p2 bra EPI_STORE;
+
+ // Release tensor memory after all collective loads and output stores finish.
+ bar.sync 0;
+ @%p1 tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r6, 64;
+ @%p0 mbarrier.inval.shared::cta.b64 [%r4];
+ ret;
+}

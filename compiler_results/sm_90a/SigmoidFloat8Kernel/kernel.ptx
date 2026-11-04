@@ -1,0 +1,63 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+.extern .shared .align 16 .b8 global_smem[];
+.visible .entry kernel(
+.param .u64 x_ptr,
+.param .u64 output_ptr,
+.param .u64 dummy_ptr1,
+.param .u64 dummy_ptr2
+){
+.reg .b32 %r<10>;
+.reg .b64 %a<6>;
+.reg .b16 %h<10>;
+.reg .f32 %f<4>;
+// Each thread processes four adjacent elements of the 2048-element tile.
+ld.param.u64 %a0,[x_ptr];
+ld.param.u64 %a1,[output_ptr];
+mov.u32 %r0,%ctaid.x;
+mov.u32 %r1,%tid.x;
+shl.b32 %r1,%r1,2;
+mad.lo.u32 %r0,%r0,2048,%r1;
+cvt.u64.u32 %a2,%r0;
+add.u64 %a3,%a0,%a2;
+shl.b64 %a2,%a2,1;
+add.u64 %a4,%a1,%a2;
+// Load four FP8 values and expand both packed pairs to half precision.
+ld.global.u32 %r2,[%a3];
+mov.b32 {%h0,%h1},%r2;
+cvt.rn.f16x2.e4m3x2 %r3,%h0;
+cvt.rn.f16x2.e4m3x2 %r4,%h1;
+mov.b32 {%h2,%h3},%r3;
+mov.b32 {%h4,%h5},%r4;
+cvt.f32.f16 %f0,%h2;
+cvt.f32.f16 %f1,%h3;
+cvt.f32.f16 %f2,%h4;
+cvt.f32.f16 %f3,%h5;
+// Evaluate sigmoid in float32 with base-two exponentials.
+mul.f32 %f0,%f0,0fBFB8AA3B;
+mul.f32 %f1,%f1,0fBFB8AA3B;
+mul.f32 %f2,%f2,0fBFB8AA3B;
+mul.f32 %f3,%f3,0fBFB8AA3B;
+ex2.approx.f32 %f0,%f0;
+ex2.approx.f32 %f1,%f1;
+ex2.approx.f32 %f2,%f2;
+ex2.approx.f32 %f3,%f3;
+add.f32 %f0,%f0,0f3F800000;
+add.f32 %f1,%f1,0f3F800000;
+add.f32 %f2,%f2,0f3F800000;
+add.f32 %f3,%f3,0f3F800000;
+rcp.approx.f32 %f0,%f0;
+rcp.approx.f32 %f1,%f1;
+rcp.approx.f32 %f2,%f2;
+rcp.approx.f32 %f3,%f3;
+// Round to half precision and store four adjacent outputs.
+cvt.rn.f16.f32 %h6,%f0;
+cvt.rn.f16.f32 %h7,%f1;
+cvt.rn.f16.f32 %h8,%f2;
+cvt.rn.f16.f32 %h9,%f3;
+mov.b32 %r5,{%h6,%h7};
+mov.b32 %r6,{%h8,%h9};
+st.global.v2.u32 [%a4],{%r5,%r6};
+ret;
+}

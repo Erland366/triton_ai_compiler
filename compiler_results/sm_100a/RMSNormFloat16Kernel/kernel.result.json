@@ -1,0 +1,31 @@
+{
+  "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 weight_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<20>;\n    .reg .b64 %d<4>;\n    .reg .b16 %h<8>;\n    .reg .f32 %x<8>, %w<8>, %s<8>, %a, %b, %inv;\n    .reg .pred %p;\n\n    // Map 512 threads to eight contiguous half elements each.\n    ld.param.u64 %d0,[x_ptr];\n    ld.param.u64 %d1,[weight_ptr];\n    ld.param.u64 %d2,[output_ptr];\n    mov.u32 %r0,%tid.x;\n    mov.u32 %r1,%ctaid.x;\n    shl.b32 %r2,%r1,13;\n    shl.b32 %r3,%r0,4;\n    add.u32 %r2,%r2,%r3;\n    cvt.u64.u32 %d3,%r2;\n    add.u64 %d0,%d0,%d3;\n    add.u64 %d1,%d1,%d3;\n    add.u64 %d2,%d2,%d3;\n\n    // Fetch both vectors early to overlap memory access with reduction.\n    ld.global.v4.b32 {%r4,%r5,%r6,%r7},[%d0];\n    ld.global.v4.b32 {%r16,%r17,%r18,%r19},[%d1];\n    mov.b32 {%h0,%h1},%r4;\n    mov.b32 {%h2,%h3},%r5;\n    mov.b32 {%h4,%h5},%r6;\n    mov.b32 {%h6,%h7},%r7;\n    cvt.f32.f16 %x0,%h0;\n    cvt.f32.f16 %x1,%h1;\n    cvt.f32.f16 %x2,%h2;\n    cvt.f32.f16 %x3,%h3;\n    cvt.f32.f16 %x4,%h4;\n    cvt.f32.f16 %x5,%h5;\n    cvt.f32.f16 %x6,%h6;\n    cvt.f32.f16 %x7,%h7;\n\n    // Compute FP32 squares and a balanced local sum.\n    mul.f32 %s0,%x0,%x0;\n    mul.f32 %s1,%x1,%x1;\n    mul.f32 %s2,%x2,%x2;\n    mul.f32 %s3,%x3,%x3;\n    mul.f32 %s4,%x4,%x4;\n    mul.f32 %s5,%x5,%x5;\n    mul.f32 %s6,%x6,%x6;\n    mul.f32 %s7,%x7,%x7;\n    add.f32 %s0,%s0,%s1;\n    add.f32 %s2,%s2,%s3;\n    add.f32 %s4,%s4,%s5;\n    add.f32 %s6,%s6,%s7;\n    add.f32 %s0,%s0,%s2;\n    add.f32 %s4,%s4,%s6;\n    add.f32 %a,%s0,%s4;\n\n    // Reduce each warp and publish one sum per warp in 64 dynamic bytes.\n    shfl.sync.bfly.b32 %b,%a,16,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,8,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,4,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,2,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,1,31,-1;\n    add.f32 %a,%a,%b;\n    and.b32 %r8,%r0,31;\n    shr.u32 %r9,%r0,5;\n    mov.u32 %r10,global_smem;\n    mad.lo.u32 %r11,%r9,4,%r10;\n    setp.eq.u32 %p,%r8,0;\n    @%p st.shared.f32 [%r11],%a;\n    bar.sync 0;\n\n    // Duplicate the sixteen-sum reduction in each half warp.\n    and.b32 %r12,%r8,15;\n    mad.lo.u32 %r11,%r12,4,%r10;\n    ld.shared.f32 %a,[%r11];\n    shfl.sync.bfly.b32 %b,%a,8,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,4,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,2,31,-1;\n    add.f32 %a,%a,%b;\n    shfl.sync.bfly.b32 %b,%a,1,31,-1;\n    add.f32 %a,%a,%b;\n\n    // Compute rsqrt(sum / 4096 + 1e-6).\n    mul.f32 %a,%a,0f39800000;\n    add.f32 %a,%a,0f358637bd;\n    rsqrt.approx.f32 %inv,%a;\n\n    // Unpack weights and preserve the two FP32 output multiplications.\n    mov.b32 {%h0,%h1},%r16;\n    mov.b32 {%h2,%h3},%r17;\n    mov.b32 {%h4,%h5},%r18;\n    mov.b32 {%h6,%h7},%r19;\n    cvt.f32.f16 %w0,%h0;\n    cvt.f32.f16 %w1,%h1;\n    cvt.f32.f16 %w2,%h2;\n    cvt.f32.f16 %w3,%h3;\n    cvt.f32.f16 %w4,%h4;\n    cvt.f32.f16 %w5,%h5;\n    cvt.f32.f16 %w6,%h6;\n    cvt.f32.f16 %w7,%h7;\n    mul.f32 %x0,%x0,%inv;\n    mul.f32 %x1,%x1,%inv;\n    mul.f32 %x2,%x2,%inv;\n    mul.f32 %x3,%x3,%inv;\n    mul.f32 %x4,%x4,%inv;\n    mul.f32 %x5,%x5,%inv;\n    mul.f32 %x6,%x6,%inv;\n    mul.f32 %x7,%x7,%inv;\n    mul.f32 %x0,%x0,%w0;\n    mul.f32 %x1,%x1,%w1;\n    mul.f32 %x2,%x2,%w2;\n    mul.f32 %x3,%x3,%w3;\n    mul.f32 %x4,%x4,%w4;\n    mul.f32 %x5,%x5,%w5;\n    mul.f32 %x6,%x6,%w6;\n    mul.f32 %x7,%x7,%w7;\n\n    // Convert pairs to half and issue one aligned vector store per thread.\n    cvt.rn.f16x2.f32 %r4,%x1,%x0;\n    cvt.rn.f16x2.f32 %r5,%x3,%x2;\n    cvt.rn.f16x2.f32 %r6,%x5,%x4;\n    cvt.rn.f16x2.f32 %r7,%x7,%x6;\n    st.global.v4.b32 [%d2],{%r4,%r5,%r6,%r7};\n    ret;\n}",
+  "num_threads_x": 512,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 0.9999221867181368,
+  "p50": 0.0082246402092278,
+  "autotune_metrics": {
+    "operator": "RMSNormFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 4096,
+      "EPS": 1e-06
+    },
+    "selected_config": {
+      "block_size": 4096,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 4096,
+        "num_warps": 16
+      },
+      "latency_ms": 0.008211136050340389,
+      "evaluated_configurations": 18,
+      "rejected_configurations": 15
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.6135805
+}

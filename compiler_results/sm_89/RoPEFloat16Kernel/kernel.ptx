@@ -1,0 +1,60 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 input_ptr,
+    .param .u64 cos_ptr,
+    .param .u64 sin_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %row, %t, %half, %feature, %offset, %rope_offset, %sign;
+    .reg .b64 %input, %cos, %sin, %output, %a, %c, %s, %o;
+    .reg .b16 %hv, %hc, %hs, %ho;
+    .reg .f32 %v, %p, %cv, %sv, %term, %result;
+
+    // Adjacent lanes own paired features in opposite 64-element halves.
+    ld.param.u64 %input, [input_ptr];
+    ld.param.u64 %cos, [cos_ptr];
+    ld.param.u64 %sin, [sin_ptr];
+    ld.param.u64 %output, [output_ptr];
+    mov.u32 %row, %ctaid.x;
+    mov.u32 %t, %tid.x;
+    shl.b32 %sign, %t, 31;
+    and.b32 %half, %t, 1;
+    shr.u32 %feature, %t, 1;
+    mad.lo.u32 %feature, %half, 64, %feature;
+    shl.b32 %offset, %row, 7;
+    add.u32 %offset, %offset, %feature;
+    mad.wide.u32 %a, %offset, 2, %input;
+    mad.wide.u32 %o, %offset, 2, %output;
+
+    // Cache the repeated 256-row tables without allocating input data in L1.
+    and.b32 %rope_offset, %offset, 32767;
+    mad.wide.u32 %c, %rope_offset, 2, %cos;
+    mad.wide.u32 %s, %rope_offset, 2, %sin;
+    ld.global.nc.L1::no_allocate.b16 %hv, [%a];
+    ld.global.nc.L1::evict_last.b16 %hc, [%c];
+    ld.global.nc.L1::evict_last.b16 %hs, [%s];
+
+    // Flip the sine sign for first-half features before using the paired input.
+    cvt.f32.f16 %cv, %hc;
+    cvt.f32.f16 %sv, %hs;
+    lop3.b32 %sv, %sv, %sign, 0x80000000, 0x96;
+
+    // Shuffle adjacent lanes to avoid loading the paired input a second time.
+    cvt.f32.f16 %v, %hv;
+    shfl.sync.bfly.b32 %p, %v, 1, 31, 0xffffffff;
+
+    // Preserve float32 arithmetic and round each valid output to half.
+    mul.rn.f32 %term, %p, %sv;
+    fma.rn.f32 %result, %v, %cv, %term;
+    cvt.rn.f16.f32 %ho, %result;
+    st.global.cs.b16 [%o], %ho;
+    ret;
+}

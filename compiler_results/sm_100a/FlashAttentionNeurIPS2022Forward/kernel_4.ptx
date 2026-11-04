@@ -1,0 +1,510 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 Q_ptr,
+    .param .u64 K_ptr,
+    .param .u64 V_ptr,
+    .param .u64 Bias_ptr,
+    .param .u64 Out_ptr,
+    .param .u64 Lse_ptr,
+    .param .u64 TMP_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<32>, %b<4>, %p<8>, %pack;
+    .reg .b64 %rd<16>, %v<12>;
+    .reg .f32 %c<16>, %o<32>, %m<2>, %l<2>, %mx<2>, %sum<2>, %scale<2>, %t<8>;
+    .reg .pred %pred<3>;
+
+    // Four warps own sixteen query rows each. All fixed-size tiles are in bounds.
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    and.b32 %r3, %r0, 31;
+    shr.u32 %r4, %r0, 5;
+    mul.wide.u32 %rd0, %r2, 16384;
+    ld.param.u64 %rd1, [Q_ptr];
+    ld.param.u64 %rd2, [K_ptr];
+    ld.param.u64 %rd3, [V_ptr];
+    add.u64 %rd1, %rd1, %rd0;
+    add.u64 %rd2, %rd2, %rd0;
+    add.u64 %rd3, %rd3, %rd0;
+    mov.u32 %r8, global_smem;
+
+    // Q/K use 24576 bytes; the first V half uses the next 8192 bytes.
+    // Barrier and allocation metadata remain below byte 32788.
+    add.u32 %r20, %r8, 32768;
+    add.u32 %r21, %r8, 32784;
+    setp.eq.u32 %pred1, %r0, 0;
+    @%pred1 mbarrier.init.shared::cta.b64 [%r20], 1;
+    setp.lt.u32 %pred2, %r0, 32;
+    @%pred2 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r21], 64;
+    @%pred2 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+    shl.b32 %r9, %r0, 4;
+    shr.u32 %r10, %r9, 3;
+    and.b32 %r10, %r10, 112;
+    xor.b32 %r10, %r9, %r10;
+    add.u32 %r10, %r10, %r8;
+    cvt.u64.u32 %rd6, %r9;
+    add.u64 %rd7, %rd2, %rd6;
+    add.u64 %rd8, %rd3, %rd6;
+    mul.wide.u32 %rd9, %r1, 8192;
+    add.u64 %rd9, %rd9, %rd1;
+    add.u64 %rd9, %rd9, %rd6;
+
+    // Coalesced asynchronous copies apply a 128-byte bank swizzle.
+    cp.async.cg.shared.global [%r10], [%rd9], 16;
+    cp.async.cg.shared.global [%r10+2048], [%rd9+2048], 16;
+    cp.async.cg.shared.global [%r10+4096], [%rd9+4096], 16;
+    cp.async.cg.shared.global [%r10+6144], [%rd9+6144], 16;
+    cp.async.cg.shared.global [%r10+8192], [%rd7], 16;
+    cp.async.cg.shared.global [%r10+10240], [%rd7+2048], 16;
+    cp.async.cg.shared.global [%r10+12288], [%rd7+4096], 16;
+    cp.async.cg.shared.global [%r10+14336], [%rd7+6144], 16;
+    cp.async.cg.shared.global [%r10+16384], [%rd7+8192], 16;
+    cp.async.cg.shared.global [%r10+18432], [%rd7+10240], 16;
+    cp.async.cg.shared.global [%r10+20480], [%rd7+12288], 16;
+    cp.async.cg.shared.global [%r10+22528], [%rd7+14336], 16;
+    cp.async.cg.shared.global [%r10+24576], [%rd8], 16;
+    cp.async.cg.shared.global [%r10+26624], [%rd8+2048], 16;
+    cp.async.cg.shared.global [%r10+28672], [%rd8+4096], 16;
+    cp.async.cg.shared.global [%r10+30720], [%rd8+6144], 16;
+    cp.async.commit_group;
+
+    // Form the transposed value matrix-load address.
+    and.b32 %r13, %r3, 7;
+    shl.b32 %r13, %r13, 4;
+    and.b32 %r16, %r3, 15;
+    shl.b32 %r16, %r16, 7;
+    and.b32 %r15, %r3, 16;
+    add.u32 %r16, %r16, %r15;
+    xor.b32 %r16, %r16, %r13;
+    add.u32 %r16, %r16, %r8;
+    add.u32 %r16, %r16, 24576;
+
+    // Initialize the online statistics and output accumulators.
+    mov.f32 %m0, 0fFF800000;
+    mov.f32 %m1, 0fFF800000;
+    mov.f32 %l0, 0fFF800000;
+    mov.f32 %l1, 0fFF800000;
+    mov.f32 %o0, 0f00000000;
+    mov.f32 %o1, 0f00000000;
+    mov.f32 %o2, 0f00000000;
+    mov.f32 %o3, 0f00000000;
+    mov.f32 %o4, 0f00000000;
+    mov.f32 %o5, 0f00000000;
+    mov.f32 %o6, 0f00000000;
+    mov.f32 %o7, 0f00000000;
+    mov.f32 %o8, 0f00000000;
+    mov.f32 %o9, 0f00000000;
+    mov.f32 %o10, 0f00000000;
+    mov.f32 %o11, 0f00000000;
+    mov.f32 %o12, 0f00000000;
+    mov.f32 %o13, 0f00000000;
+    mov.f32 %o14, 0f00000000;
+    mov.f32 %o15, 0f00000000;
+    mov.f32 %o16, 0f00000000;
+    mov.f32 %o17, 0f00000000;
+    mov.f32 %o18, 0f00000000;
+    mov.f32 %o19, 0f00000000;
+    mov.f32 %o20, 0f00000000;
+    mov.f32 %o21, 0f00000000;
+    mov.f32 %o22, 0f00000000;
+    mov.f32 %o23, 0f00000000;
+    mov.f32 %o24, 0f00000000;
+    mov.f32 %o25, 0f00000000;
+    mov.f32 %o26, 0f00000000;
+    mov.f32 %o27, 0f00000000;
+    mov.f32 %o28, 0f00000000;
+    mov.f32 %o29, 0f00000000;
+    mov.f32 %o30, 0f00000000;
+    mov.f32 %o31, 0f00000000;
+
+    // Publish staged operands before the asynchronous tensor-core reads.
+    cp.async.wait_group 0;
+    fence.proxy.async.shared::cta;
+    fence.mbarrier_init.release.cluster;
+    bar.sync 0;
+    ld.shared.u32 %r22, [%r21];
+    setp.eq.u32 %pred1, %r0, 0;
+    @!%pred1 bra SCORE_WAIT;
+
+    // Blackwell tensor cores compute all 128 scores into two tensor-memory half-lanes.
+    cvt.u64.u32 %rd12, %r8;
+    shr.u64 %rd12, %rd12, 4;
+    or.b64 %rd12, %rd12, 0x4000404000000000;
+    add.u64 %rd13, %rd12, 512;
+    mov.u32 %r23, 0x04100010;
+    mov.u32 %r25, 0;
+    setp.ne.u32 %pred0, %r0, %r0;
+    tcgen05.mma.cta_group::1.kind::f16 [%r22], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    setp.eq.u32 %pred0, %r0, %r0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r22], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r22], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r22], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    sub.u64 %rd12, %rd12, 6;
+    add.u64 %rd13, %rd13, 506;
+    add.u32 %r24, %r22, 1048576;
+    setp.ne.u32 %pred0, %r0, %r0;
+    tcgen05.mma.cta_group::1.kind::f16 [%r24], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    setp.eq.u32 %pred0, %r0, %r0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r24], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r24], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    add.u64 %rd12, %rd12, 2;
+    add.u64 %rd13, %rd13, 2;
+    tcgen05.mma.cta_group::1.kind::f16 [%r24], %rd12, %rd13, %r23, {%r25, %r25, %r25, %r25}, %pred0;
+    tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r20];
+
+SCORE_WAIT:
+    // Wait for the complete score product before reusing query storage.
+    mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 %pred0, [%r20], 0;
+    @!%pred0 bra SCORE_WAIT;
+    tcgen05.fence::after_thread_sync;
+
+    // Overlap loading values 64..127 with processing the first two score tiles.
+    cp.async.cg.shared.global [%r10], [%rd8+8192], 16;
+    cp.async.cg.shared.global [%r10+2048], [%rd8+10240], 16;
+    cp.async.cg.shared.global [%r10+4096], [%rd8+12288], 16;
+    cp.async.cg.shared.global [%r10+6144], [%rd8+14336], 16;
+    cp.async.commit_group;
+    shl.b32 %r14, %r4, 21;
+    add.u32 %r14, %r14, %r22;
+    mov.u32 %r17, 0;
+
+KEY_TILE:
+    // Read one 32-key score tile, preserving the online tile order.
+    tcgen05.ld.sync.aligned.16x256b.x4.b32 {%c0, %c1, %c2, %c3, %c4, %c5, %c6, %c7, %c8, %c9, %c10, %c11, %c12, %c13, %c14, %c15}, [%r14];
+    tcgen05.wait::ld.sync.aligned;
+
+    // Each four-lane group reduces its two query-row maxima.
+    max.f32 %mx0, %c0, %c1;
+    max.f32 %mx0, %mx0, %c4;
+    max.f32 %mx0, %mx0, %c5;
+    max.f32 %mx0, %mx0, %c8;
+    max.f32 %mx0, %mx0, %c9;
+    max.f32 %mx0, %mx0, %c12;
+    max.f32 %mx0, %mx0, %c13;
+    shfl.sync.bfly.b32 %t0, %mx0, 1, 31, -1;
+    max.f32 %mx0, %mx0, %t0;
+    shfl.sync.bfly.b32 %t0, %mx0, 2, 31, -1;
+    max.f32 %mx0, %mx0, %t0;
+    mul.f32 %mx0, %mx0, 0f3E38AA3B;
+    max.f32 %mx0, %mx0, %l0;
+    max.f32 %mx1, %c2, %c3;
+    max.f32 %mx1, %mx1, %c6;
+    max.f32 %mx1, %mx1, %c7;
+    max.f32 %mx1, %mx1, %c10;
+    max.f32 %mx1, %mx1, %c11;
+    max.f32 %mx1, %mx1, %c14;
+    max.f32 %mx1, %mx1, %c15;
+    shfl.sync.bfly.b32 %t0, %mx1, 1, 31, -1;
+    max.f32 %mx1, %mx1, %t0;
+    shfl.sync.bfly.b32 %t0, %mx1, 2, 31, -1;
+    max.f32 %mx1, %mx1, %t0;
+    mul.f32 %mx1, %mx1, 0f3E38AA3B;
+    max.f32 %mx1, %mx1, %l1;
+
+    // Base-two statistics avoid repeated logarithm-base conversions.
+    sub.f32 %t0, %m0, %mx0;
+    ex2.approx.f32 %scale0, %t0;
+    mov.b64 %v0, {%scale0, %scale0};
+    neg.f32 %t2, %mx0;
+    mov.b64 %v4, {%t2, %t2};
+    sub.f32 %t0, %m1, %mx1;
+    ex2.approx.f32 %scale1, %t0;
+    mov.b64 %v1, {%scale1, %scale1};
+    neg.f32 %t3, %mx1;
+    mov.b64 %v5, {%t3, %t3};
+
+    // Packed FP32 FMA handles adjacent score columns together.
+    mov.b64 %v3, 0x3E38AA3B3E38AA3B;
+    mov.b64 %v2, {%c0, %c1};
+    fma.rn.f32x2 %v2, %v2, %v3, %v4;
+    mov.b64 {%c0, %c1}, %v2;
+    ex2.approx.f32 %c0, %c0;
+    ex2.approx.f32 %c1, %c1;
+    mov.b64 %v2, {%c2, %c3};
+    fma.rn.f32x2 %v2, %v2, %v3, %v5;
+    mov.b64 {%c2, %c3}, %v2;
+    ex2.approx.f32 %c2, %c2;
+    ex2.approx.f32 %c3, %c3;
+    mov.b64 %v2, {%c4, %c5};
+    fma.rn.f32x2 %v2, %v2, %v3, %v4;
+    mov.b64 {%c4, %c5}, %v2;
+    ex2.approx.f32 %c4, %c4;
+    ex2.approx.f32 %c5, %c5;
+    mov.b64 %v2, {%c6, %c7};
+    fma.rn.f32x2 %v2, %v2, %v3, %v5;
+    mov.b64 {%c6, %c7}, %v2;
+    ex2.approx.f32 %c6, %c6;
+    ex2.approx.f32 %c7, %c7;
+    mov.b64 %v2, {%c8, %c9};
+    fma.rn.f32x2 %v2, %v2, %v3, %v4;
+    mov.b64 {%c8, %c9}, %v2;
+    ex2.approx.f32 %c8, %c8;
+    ex2.approx.f32 %c9, %c9;
+    mov.b64 %v2, {%c10, %c11};
+    fma.rn.f32x2 %v2, %v2, %v3, %v5;
+    mov.b64 {%c10, %c11}, %v2;
+    ex2.approx.f32 %c10, %c10;
+    ex2.approx.f32 %c11, %c11;
+    mov.b64 %v2, {%c12, %c13};
+    fma.rn.f32x2 %v2, %v2, %v3, %v4;
+    mov.b64 {%c12, %c13}, %v2;
+    ex2.approx.f32 %c12, %c12;
+    ex2.approx.f32 %c13, %c13;
+    mov.b64 %v2, {%c14, %c15};
+    fma.rn.f32x2 %v2, %v2, %v3, %v5;
+    mov.b64 {%c14, %c15}, %v2;
+    ex2.approx.f32 %c14, %c14;
+    ex2.approx.f32 %c15, %c15;
+
+    // Sum FP32 probabilities before rounding them to FP16.
+    mov.b64 %v6, {%c0, %c1};
+    mov.b64 %v7, {%c4, %c5};
+    mov.b64 %v8, {%c8, %c9};
+    mov.b64 %v9, {%c12, %c13};
+    add.f32x2 %v6, %v6, %v7;
+    add.f32x2 %v8, %v8, %v9;
+    add.f32x2 %v6, %v6, %v8;
+    mov.b64 {%t0, %t1}, %v6;
+    add.f32 %sum0, %t0, %t1;
+    shfl.sync.bfly.b32 %t0, %sum0, 1, 31, -1;
+    add.f32 %sum0, %sum0, %t0;
+    shfl.sync.bfly.b32 %t0, %sum0, 2, 31, -1;
+    add.f32 %sum0, %sum0, %t0;
+    mov.b64 %v6, {%c2, %c3};
+    mov.b64 %v7, {%c6, %c7};
+    mov.b64 %v8, {%c10, %c11};
+    mov.b64 %v9, {%c14, %c15};
+    add.f32x2 %v6, %v6, %v7;
+    add.f32x2 %v8, %v8, %v9;
+    add.f32x2 %v6, %v6, %v8;
+    mov.b64 {%t0, %t1}, %v6;
+    add.f32 %sum1, %t0, %t1;
+    shfl.sync.bfly.b32 %t0, %sum1, 1, 31, -1;
+    add.f32 %sum1, %sum1, %t0;
+    shfl.sync.bfly.b32 %t0, %sum1, 2, 31, -1;
+    add.f32 %sum1, %sum1, %t0;
+
+    // Rescale both output columns in each register pair together.
+    mov.b64 %v2, {%o0, %o1}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o0, %o1}, %v2;
+    mov.b64 %v2, {%o2, %o3}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o2, %o3}, %v2;
+    mov.b64 %v2, {%o4, %o5}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o4, %o5}, %v2;
+    mov.b64 %v2, {%o6, %o7}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o6, %o7}, %v2;
+    mov.b64 %v2, {%o8, %o9}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o8, %o9}, %v2;
+    mov.b64 %v2, {%o10, %o11}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o10, %o11}, %v2;
+    mov.b64 %v2, {%o12, %o13}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o12, %o13}, %v2;
+    mov.b64 %v2, {%o14, %o15}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o14, %o15}, %v2;
+    mov.b64 %v2, {%o16, %o17}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o16, %o17}, %v2;
+    mov.b64 %v2, {%o18, %o19}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o18, %o19}, %v2;
+    mov.b64 %v2, {%o20, %o21}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o20, %o21}, %v2;
+    mov.b64 %v2, {%o22, %o23}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o22, %o23}, %v2;
+    mov.b64 %v2, {%o24, %o25}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o24, %o25}, %v2;
+    mov.b64 %v2, {%o26, %o27}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o26, %o27}, %v2;
+    mov.b64 %v2, {%o28, %o29}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o28, %o29}, %v2;
+    mov.b64 %v2, {%o30, %o31}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o30, %o31}, %v2;
+
+    // Update each row's running log-sum-exp before releasing temporary statistics.
+    sub.f32 %t0, %l0, %mx0;
+    ex2.approx.f32 %t0, %t0;
+    add.f32 %t0, %sum0, %t0;
+    lg2.approx.f32 %t0, %t0;
+    add.f32 %l0, %t0, %mx0;
+    mov.f32 %m0, %mx0;
+    sub.f32 %t0, %l1, %mx1;
+    ex2.approx.f32 %t0, %t0;
+    add.f32 %t0, %sum1, %t0;
+    lg2.approx.f32 %t0, %t0;
+    add.f32 %l1, %t0, %mx1;
+    mov.f32 %m1, %mx1;
+
+    // FP16 probabilities become register operands for the value products.
+    cvt.rn.f16x2.f32 %p0, %c1, %c0;
+    cvt.rn.f16x2.f32 %p1, %c3, %c2;
+    cvt.rn.f16x2.f32 %p2, %c5, %c4;
+    cvt.rn.f16x2.f32 %p3, %c7, %c6;
+    cvt.rn.f16x2.f32 %p4, %c9, %c8;
+    cvt.rn.f16x2.f32 %p5, %c11, %c10;
+    cvt.rn.f16x2.f32 %p6, %c13, %c12;
+    cvt.rn.f16x2.f32 %p7, %c15, %c14;
+
+    // Accumulate the first sixteen value rows into all output columns.
+    xor.b32 %r18, %r16, 0;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o0, %o1, %o2, %o3}, {%p0, %p1, %p2, %p3}, {%b0, %b1}, {%o0, %o1, %o2, %o3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o4, %o5, %o6, %o7}, {%p0, %p1, %p2, %p3}, {%b2, %b3}, {%o4, %o5, %o6, %o7};
+    xor.b32 %r18, %r16, 32;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o8, %o9, %o10, %o11}, {%p0, %p1, %p2, %p3}, {%b0, %b1}, {%o8, %o9, %o10, %o11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o12, %o13, %o14, %o15}, {%p0, %p1, %p2, %p3}, {%b2, %b3}, {%o12, %o13, %o14, %o15};
+    xor.b32 %r18, %r16, 64;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o16, %o17, %o18, %o19}, {%p0, %p1, %p2, %p3}, {%b0, %b1}, {%o16, %o17, %o18, %o19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o20, %o21, %o22, %o23}, {%p0, %p1, %p2, %p3}, {%b2, %b3}, {%o20, %o21, %o22, %o23};
+    xor.b32 %r18, %r16, 96;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o24, %o25, %o26, %o27}, {%p0, %p1, %p2, %p3}, {%b0, %b1}, {%o24, %o25, %o26, %o27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o28, %o29, %o30, %o31}, {%p0, %p1, %p2, %p3}, {%b2, %b3}, {%o28, %o29, %o30, %o31};
+
+    // Accumulate the remaining sixteen value rows.
+    xor.b32 %r18, %r16, 0;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18+2048];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o0, %o1, %o2, %o3}, {%p4, %p5, %p6, %p7}, {%b0, %b1}, {%o0, %o1, %o2, %o3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o4, %o5, %o6, %o7}, {%p4, %p5, %p6, %p7}, {%b2, %b3}, {%o4, %o5, %o6, %o7};
+    xor.b32 %r18, %r16, 32;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18+2048];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o8, %o9, %o10, %o11}, {%p4, %p5, %p6, %p7}, {%b0, %b1}, {%o8, %o9, %o10, %o11};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o12, %o13, %o14, %o15}, {%p4, %p5, %p6, %p7}, {%b2, %b3}, {%o12, %o13, %o14, %o15};
+    xor.b32 %r18, %r16, 64;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18+2048];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o16, %o17, %o18, %o19}, {%p4, %p5, %p6, %p7}, {%b0, %b1}, {%o16, %o17, %o18, %o19};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o20, %o21, %o22, %o23}, {%p4, %p5, %p6, %p7}, {%b2, %b3}, {%o20, %o21, %o22, %o23};
+    xor.b32 %r18, %r16, 96;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%b0, %b1, %b2, %b3}, [%r18+2048];
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o24, %o25, %o26, %o27}, {%p4, %p5, %p6, %p7}, {%b0, %b1}, {%o24, %o25, %o26, %o27};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%o28, %o29, %o30, %o31}, {%p4, %p5, %p6, %p7}, {%b2, %b3}, {%o28, %o29, %o30, %o31};
+
+    // At key 64 switch tensor-memory half-lanes and the value buffer.
+    add.u32 %r14, %r14, 32;
+    add.u32 %r16, %r16, 4096;
+    add.u32 %r17, %r17, 1;
+    setp.eq.u32 %pred0, %r17, 2;
+    @!%pred0 bra NO_VALUE_SWITCH;
+    add.u32 %r14, %r14, 1048512;
+    sub.u32 %r16, %r16, 32768;
+    cp.async.wait_group 0;
+    bar.sync 0;
+NO_VALUE_SWITCH:
+    setp.lt.u32 %pred0, %r17, 4;
+    @%pred0 bra KEY_TILE;
+
+    // Rematerialize row indices for the epilogue.
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    and.b32 %r3, %r0, 31;
+    shr.u32 %r4, %r0, 5;
+    shr.u32 %r5, %r3, 2;
+    and.b32 %r6, %r3, 3;
+    mad.lo.u32 %r7, %r4, 16, %r5;
+    mad.lo.u32 %r7, %r1, 64, %r7;
+    ld.param.u64 %rd5, [Lse_ptr];
+
+    // Normalize and stage output in the retired K buffer at bytes 8192..16383.
+    and.b32 %r24, %r3, 15;
+    mad.lo.u32 %r24, %r4, 16, %r24;
+    shl.b32 %r24, %r24, 7;
+    and.b32 %r25, %r3, 16;
+    add.u32 %r24, %r24, %r25;
+    and.b32 %r25, %r3, 7;
+    shl.b32 %r25, %r25, 4;
+    xor.b32 %r24, %r24, %r25;
+    add.u32 %r24, %r24, %r8;
+    add.u32 %r24, %r24, 8192;
+    sub.f32 %t0, %m0, %l0;
+    ex2.approx.f32 %scale0, %t0;
+    mov.b64 %v0, {%scale0, %scale0};
+    sub.f32 %t0, %m1, %l1;
+    ex2.approx.f32 %scale1, %t0;
+    mov.b64 %v1, {%scale1, %scale1};
+    mov.b64 %v2, {%o0, %o1}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o0, %o1}, %v2;
+    cvt.rn.f16x2.f32 %p0, %o1, %o0;
+    mov.b64 %v2, {%o2, %o3}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o2, %o3}, %v2;
+    cvt.rn.f16x2.f32 %p1, %o3, %o2;
+    mov.b64 %v2, {%o4, %o5}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o4, %o5}, %v2;
+    cvt.rn.f16x2.f32 %p2, %o5, %o4;
+    mov.b64 %v2, {%o6, %o7}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o6, %o7}, %v2;
+    cvt.rn.f16x2.f32 %p3, %o7, %o6;
+    xor.b32 %r18, %r24, 0;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r18], {%p0, %p1, %p2, %p3};
+    mov.b64 %v2, {%o8, %o9}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o8, %o9}, %v2;
+    cvt.rn.f16x2.f32 %p0, %o9, %o8;
+    mov.b64 %v2, {%o10, %o11}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o10, %o11}, %v2;
+    cvt.rn.f16x2.f32 %p1, %o11, %o10;
+    mov.b64 %v2, {%o12, %o13}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o12, %o13}, %v2;
+    cvt.rn.f16x2.f32 %p2, %o13, %o12;
+    mov.b64 %v2, {%o14, %o15}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o14, %o15}, %v2;
+    cvt.rn.f16x2.f32 %p3, %o15, %o14;
+    xor.b32 %r18, %r24, 32;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r18], {%p0, %p1, %p2, %p3};
+    mov.b64 %v2, {%o16, %o17}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o16, %o17}, %v2;
+    cvt.rn.f16x2.f32 %p0, %o17, %o16;
+    mov.b64 %v2, {%o18, %o19}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o18, %o19}, %v2;
+    cvt.rn.f16x2.f32 %p1, %o19, %o18;
+    mov.b64 %v2, {%o20, %o21}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o20, %o21}, %v2;
+    cvt.rn.f16x2.f32 %p2, %o21, %o20;
+    mov.b64 %v2, {%o22, %o23}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o22, %o23}, %v2;
+    cvt.rn.f16x2.f32 %p3, %o23, %o22;
+    xor.b32 %r18, %r24, 64;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r18], {%p0, %p1, %p2, %p3};
+    mov.b64 %v2, {%o24, %o25}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o24, %o25}, %v2;
+    cvt.rn.f16x2.f32 %p0, %o25, %o24;
+    mov.b64 %v2, {%o26, %o27}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o26, %o27}, %v2;
+    cvt.rn.f16x2.f32 %p1, %o27, %o26;
+    mov.b64 %v2, {%o28, %o29}; mul.f32x2 %v2, %v2, %v0; mov.b64 {%o28, %o29}, %v2;
+    cvt.rn.f16x2.f32 %p2, %o29, %o28;
+    mov.b64 %v2, {%o30, %o31}; mul.f32x2 %v2, %v2, %v1; mov.b64 {%o30, %o31}, %v2;
+    cvt.rn.f16x2.f32 %p3, %o31, %o30;
+    xor.b32 %r18, %r24, 96;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r18], {%p0, %p1, %p2, %p3};
+
+    // Store natural-log LSE once per query row.
+    mul.f32 %l0, %l0, 0f3F317218;
+    mul.f32 %l1, %l1, 0f3F317218;
+    mad.lo.u32 %r19, %r2, 128, %r7;
+    mul.wide.u32 %rd11, %r19, 4;
+    add.u64 %rd11, %rd5, %rd11;
+    setp.eq.u32 %pred1, %r6, 0;
+    @%pred1 st.global.f32 [%rd11], %l0;
+    @%pred1 st.global.f32 [%rd11+32], %l1;
+
+    // The same barrier publishes output stores and permits tensor-memory release.
+    tcgen05.fence::before_thread_sync;
+    bar.sync 0;
+    setp.lt.u32 %pred2, %r0, 32;
+    @%pred2 tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r22, 64;
+    setp.eq.u32 %pred1, %r0, 0;
+    @%pred1 mbarrier.inval.shared::cta.b64 [%r20];
+
+    // Four 16-byte transfers per thread write the contiguous output tile.
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    shl.b32 %r9, %r0, 4;
+    shr.u32 %r10, %r9, 3;
+    and.b32 %r10, %r10, 112;
+    xor.b32 %r10, %r10, %r9;
+    add.u32 %r10, %r10, %r8;
+    add.u32 %r10, %r10, 8192;
+    mad.lo.u32 %r11, %r1, 8192, %r9;
+    mul.wide.u32 %rd0, %r2, 16384;
+    cvt.u64.u32 %rd6, %r11;
+    add.u64 %rd0, %rd0, %rd6;
+    ld.param.u64 %rd4, [Out_ptr];
+    add.u64 %rd4, %rd4, %rd0;
+    ld.shared.v4.b32 {%p0, %p1, %p2, %p3}, [%r10];
+    st.global.v4.b32 [%rd4], {%p0, %p1, %p2, %p3};
+    ld.shared.v4.b32 {%p0, %p1, %p2, %p3}, [%r10+2048];
+    st.global.v4.b32 [%rd4+2048], {%p0, %p1, %p2, %p3};
+    ld.shared.v4.b32 {%p0, %p1, %p2, %p3}, [%r10+4096];
+    st.global.v4.b32 [%rd4+4096], {%p0, %p1, %p2, %p3};
+    ld.shared.v4.b32 {%p0, %p1, %p2, %p3}, [%r10+6144];
+    st.global.v4.b32 [%rd4+6144], {%p0, %p1, %p2, %p3};
+    ret;
+}

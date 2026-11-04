@@ -1,0 +1,81 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 input_ptr,\n    .param .u64 cos_ptr,\n    .param .u64 sin_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %second, %done;\n    .reg .b32 %r<18>;\n    .reg .b64 %a<10>;\n    .reg .b16 %h<18>;\n    .reg .f32 %f<24>;\n\n    // Traverse all 128 features with four contiguous features per active lane.\n    mov.u32 %r0, %tid.x;\n    shl.b32 %r0, %r0, 2;\n    setp.ge.u32 %done, %r0, 128;\n    @%done ret;\n    mov.u32 %r1, %ctaid.x;\n    shl.b32 %r2, %r1, 7;\n    ld.param.u64 %a0, [input_ptr];\n    ld.param.u64 %a1, [cos_ptr];\n    ld.param.u64 %a2, [sin_ptr];\n    ld.param.u64 %a3, [output_ptr];\nTILE:\n    // Masking the element index implements the 256-position coefficient cycle.\n    add.u32 %r3, %r2, %r0;\n    and.b32 %r4, %r3, 32767;\n    setp.ge.u32 %second, %r0, 64;\n    cvt.u64.u32 %a4, %r3;\n    cvt.u64.u32 %a5, %r4;\n    add.u64 %a4, %a0, %a4;\n    add.u64 %a6, %a1, %a5;\n    add.u64 %a7, %a2, %a5;\n\n    // Load each input feature only once, together with cosine and sine.\n    ld.global.u32 %r6, [%a4];\n    ld.global.u32 %r7, [%a6];\n    ld.global.u32 %r8, [%a7];\n\n    // Negate both input and cosine in the second half, preserving their product.\n    // Exchanging these signed inputs then directly produces the rotated values.\n    @%second xor.b32 %r6, %r6, 0x80808080;\n    @%second xor.b32 %r7, %r7, 0x80808080;\n    mov.b32 {%h0, %h1}, %r6;\n    mov.b32 {%h2, %h3}, %r7;\n    mov.b32 {%h4, %h5}, %r8;\n\n    // Native FP8-to-FP16 conversion followed by FP32 widening is exact.\n    cvt.rn.f16x2.e4m3x2 %r10, %h0;\n    mov.b32 {%h6, %h7}, %r10;\n    cvt.f32.f16 %f0, %h6;\n    cvt.f32.f16 %f1, %h7;\n    cvt.rn.f16x2.e4m3x2 %r11, %h1;\n    mov.b32 {%h8, %h9}, %r11;\n    cvt.f32.f16 %f2, %h8;\n    cvt.f32.f16 %f3, %h9;\n    cvt.rn.f16x2.e4m3x2 %r12, %h2;\n    mov.b32 {%h10, %h11}, %r12;\n    cvt.f32.f16 %f4, %h10;\n    cvt.f32.f16 %f5, %h11;\n    cvt.rn.f16x2.e4m3x2 %r13, %h3;\n    mov.b32 {%h12, %h13}, %r13;\n    cvt.f32.f16 %f6, %h12;\n    cvt.f32.f16 %f7, %h13;\n    cvt.rn.f16x2.e4m3x2 %r14, %h4;\n    mov.b32 {%h14, %h15}, %r14;\n    cvt.f32.f16 %f8, %h14;\n    cvt.f32.f16 %f9, %h15;\n    cvt.rn.f16x2.e4m3x2 %r15, %h5;\n    mov.b32 {%h16, %h17}, %r15;\n    cvt.f32.f16 %f10, %h16;\n    cvt.f32.f16 %f11, %h17;\n\n    // XOR lane 16 selects partners exactly 64 features away within this warp.\n    shfl.sync.bfly.b32 %f12, %f0, 16, 31, -1;\n    shfl.sync.bfly.b32 %f13, %f1, 16, 31, -1;\n    shfl.sync.bfly.b32 %f14, %f2, 16, 31, -1;\n    shfl.sync.bfly.b32 %f15, %f3, 16, 31, -1;\n\n    // Evaluate the rotary transform in FP32 and round each output once to FP16.\n    mul.f32 %f16, %f12, %f8;\n    mul.f32 %f17, %f13, %f9;\n    mul.f32 %f18, %f14, %f10;\n    mul.f32 %f19, %f15, %f11;\n    fma.rn.f32 %f20, %f0, %f4, %f16;\n    fma.rn.f32 %f21, %f1, %f5, %f17;\n    fma.rn.f32 %f22, %f2, %f6, %f18;\n    fma.rn.f32 %f23, %f3, %f7, %f19;\n    cvt.rn.f16x2.f32 %r16, %f21, %f20;\n    cvt.rn.f16x2.f32 %r17, %f23, %f22;\n\n    // One aligned vector store writes four consecutive FP16 features.\n    mul.wide.u32 %a8, %r3, 2;\n    add.u64 %a8, %a3, %a8;\n    st.global.v2.u32 [%a8], {%r16, %r17};\n\n    // Advance the vectorized thread-stride loop; only one iteration is needed.\n    add.u32 %r0, %r0, 512;\n    setp.lt.u32 %done, %r0, 128;\n    @%done bra TILE;\n    ret;\n}\n",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": [
+      "ptxas rejected immediate scale operands for mul.rn.f16x2; .b32 registers were required."
+    ]
+  },
+  "evaluation": {
+    "kernel_name": "RoPEFloat8Kernel",
+    "git_commit_hash": "0208f9212bc1f8db337737ef76dcf75c63d8014c",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 2.7231078548431396,
+    "triton_p50": 2.723457591533661,
+    "triton_p80": 2.7238122205734254,
+    "triton_p90": 2.72417492389679,
+    "triton_p95": 2.72433145570755,
+    "triton_p99": 2.7246102745056153,
+    "p20": 2.7213169832229616,
+    "p50": 2.7215689706802366,
+    "p80": 2.721847034454346,
+    "p90": 2.721995267391205,
+    "p95": 2.722119315624237,
+    "p99": 2.7223261624813078,
+    "speedup_vs_triton": 1.0006939456151105,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas -arch=sm_90a -v --warning-as-error /tmp/triton-ptxas-0svmtbyh/kernel.ptx -o /tmp/triton-ptxas-0svmtbyh/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas info    : 0 bytes gmem\nptxas info    : Compiling entry function 'kernel' for 'sm_90a'\nptxas info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas info    : Used 30 registers, used 0 barriers\nptxas info    : Compile time = 4.618 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "RoPEFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 128
+    },
+    "selected_config": {
+      "block_size": 128,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 128,
+        "num_warps": 4
+      },
+      "latency_ms": 2.698176622390747,
+      "evaluated_configurations": 3,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA H100 PCIe",
+  "run_cost_usd_so_far": 3.0587975000000003
+}

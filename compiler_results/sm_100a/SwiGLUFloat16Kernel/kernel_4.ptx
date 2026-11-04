@@ -1,0 +1,124 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 gate_ptr,
+    .param .u64 value_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %g,%v,%o,%off;
+    .reg .b32 %t,%b,%i,%gp<4>,%vp<4>,%op<4>;
+    .reg .b16 %gh<8>,%vh<8>;
+    .reg .f32 %a<8>,%x<8>,%e<8>;
+
+    // Each thread owns eight adjacent halves; 128 threads cover 1024 elements.
+    ld.param.u64 %g,[gate_ptr];
+    ld.param.u64 %v,[value_ptr];
+    ld.param.u64 %o,[output_ptr];
+    mov.u32 %t,%tid.x;
+    mov.u32 %b,%ctaid.x;
+    shl.b32 %i,%b,10;
+    mad.lo.u32 %i,%t,8,%i;
+    mul.wide.u32 %off,%i,2;
+    add.u64 %g,%g,%off;
+    add.u64 %v,%v,%off;
+    add.u64 %o,%o,%off;
+
+    // Load aligned 16-byte vectors. All tile elements are in bounds.
+    ld.global.v4.b32 {%gp0,%gp1,%gp2,%gp3},[%g];
+    ld.global.v4.b32 {%vp0,%vp1,%vp2,%vp3},[%v];
+
+    // Unpack the half inputs and promote all arithmetic to float32.
+    mov.b32 {%gh0,%gh1},%gp0;
+    mov.b32 {%gh2,%gh3},%gp1;
+    mov.b32 {%gh4,%gh5},%gp2;
+    mov.b32 {%gh6,%gh7},%gp3;
+    mov.b32 {%vh0,%vh1},%vp0;
+    mov.b32 {%vh2,%vh3},%vp1;
+    mov.b32 {%vh4,%vh5},%vp2;
+    mov.b32 {%vh6,%vh7},%vp3;
+    cvt.f32.f16 %a0,%gh0;
+    cvt.f32.f16 %a1,%gh1;
+    cvt.f32.f16 %a2,%gh2;
+    cvt.f32.f16 %a3,%gh3;
+    cvt.f32.f16 %a4,%gh4;
+    cvt.f32.f16 %a5,%gh5;
+    cvt.f32.f16 %a6,%gh6;
+    cvt.f32.f16 %a7,%gh7;
+    cvt.f32.f16 %x0,%vh0;
+    cvt.f32.f16 %x1,%vh1;
+    cvt.f32.f16 %x2,%vh2;
+    cvt.f32.f16 %x3,%vh3;
+    cvt.f32.f16 %x4,%vh4;
+    cvt.f32.f16 %x5,%vh5;
+    cvt.f32.f16 %x6,%vh6;
+    cvt.f32.f16 %x7,%vh7;
+
+    // Convert natural exponentials to base two using -log2(e).
+    mul.f32 %e0,%a0,0fBFB8AA3B;
+    mul.f32 %e1,%a1,0fBFB8AA3B;
+    mul.f32 %e2,%a2,0fBFB8AA3B;
+    mul.f32 %e3,%a3,0fBFB8AA3B;
+    mul.f32 %e4,%a4,0fBFB8AA3B;
+    mul.f32 %e5,%a5,0fBFB8AA3B;
+    mul.f32 %e6,%a6,0fBFB8AA3B;
+    mul.f32 %e7,%a7,0fBFB8AA3B;
+    ex2.approx.f32 %e0,%e0;
+    ex2.approx.f32 %e1,%e1;
+    ex2.approx.f32 %e2,%e2;
+    ex2.approx.f32 %e3,%e3;
+    ex2.approx.f32 %e4,%e4;
+    ex2.approx.f32 %e5,%e5;
+    ex2.approx.f32 %e6,%e6;
+    ex2.approx.f32 %e7,%e7;
+
+    // Form the reciprocal sigmoid denominators.
+    add.f32 %e0,%e0,0f3F800000;
+    add.f32 %e1,%e1,0f3F800000;
+    add.f32 %e2,%e2,0f3F800000;
+    add.f32 %e3,%e3,0f3F800000;
+    add.f32 %e4,%e4,0f3F800000;
+    add.f32 %e5,%e5,0f3F800000;
+    add.f32 %e6,%e6,0f3F800000;
+    add.f32 %e7,%e7,0f3F800000;
+    rcp.approx.ftz.f32 %e0,%e0;
+    rcp.approx.ftz.f32 %e1,%e1;
+    rcp.approx.ftz.f32 %e2,%e2;
+    rcp.approx.ftz.f32 %e3,%e3;
+    rcp.approx.ftz.f32 %e4,%e4;
+    rcp.approx.ftz.f32 %e5,%e5;
+    rcp.approx.ftz.f32 %e6,%e6;
+    rcp.approx.ftz.f32 %e7,%e7;
+
+    // Preserve the original order: divide gate first, then multiply by value.
+    mul.f32 %a0,%a0,%e0;
+    mul.f32 %a1,%a1,%e1;
+    mul.f32 %a2,%a2,%e2;
+    mul.f32 %a3,%a3,%e3;
+    mul.f32 %a4,%a4,%e4;
+    mul.f32 %a5,%a5,%e5;
+    mul.f32 %a6,%a6,%e6;
+    mul.f32 %a7,%a7,%e7;
+    mul.f32 %a0,%a0,%x0;
+    mul.f32 %a1,%a1,%x1;
+    mul.f32 %a2,%a2,%x2;
+    mul.f32 %a3,%a3,%x3;
+    mul.f32 %a4,%a4,%x4;
+    mul.f32 %a5,%a5,%x5;
+    mul.f32 %a6,%a6,%x6;
+    mul.f32 %a7,%a7,%x7;
+
+    // Round and pack adjacent results, then store one aligned vector.
+    cvt.rn.f16x2.f32 %op0,%a1,%a0;
+    cvt.rn.f16x2.f32 %op1,%a3,%a2;
+    cvt.rn.f16x2.f32 %op2,%a5,%a4;
+    cvt.rn.f16x2.f32 %op3,%a7,%a6;
+    st.global.v4.b32 [%o],{%op0,%op1,%op2,%op3};
+    ret;
+}

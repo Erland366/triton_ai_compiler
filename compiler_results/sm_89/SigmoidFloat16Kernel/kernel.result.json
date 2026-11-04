@@ -1,0 +1,28 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i;\n    .reg .b64 %x, %y, %off, %a, %o;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<6>;\n\n    // Each thread processes two adjacent halves in its 512-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    mad.lo.u32 %i, %b, 256, %t;\n    mul.wide.u32 %off, %i, 4;\n    add.u64 %a, %x, %off;\n    add.u64 %o, %y, %off;\n\n    // Load both halves and promote to single precision.\n    ld.global.v2.b16 {%h0, %h1}, [%a];\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n\n    // Evaluate sigmoid using -log2(e), base-two exponential, and reciprocal.\n    mul.f32 %f0, %f0, 0fBFB8AA3B;\n    mul.f32 %f1, %f1, 0fBFB8AA3B;\n    ex2.approx.f32 %f2, %f0;\n    ex2.approx.f32 %f3, %f1;\n    add.f32 %f2, %f2, 0f3F800000;\n    add.f32 %f3, %f3, 0f3F800000;\n    rcp.approx.f32 %f4, %f2;\n    rcp.approx.f32 %f5, %f3;\n\n    // Round to half precision and write both outputs without masking.\n    cvt.rn.f16.f32 %h2, %f4;\n    cvt.rn.f16.f32 %h3, %f5;\n    st.global.v2.b16 [%o], {%h2, %h3};\n    ret;\n}",
+  "num_threads_x": 256,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 0.9995137501341627,
+  "p50": 0.009213440306484699,
+  "autotune_metrics": {
+    "operator": "SigmoidFloat16Kernel",
+    "constexpr_values": {},
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 8
+      },
+      "latency_ms": 0.00883907820600116,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.21911750000000002
+}

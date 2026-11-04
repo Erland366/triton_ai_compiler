@@ -1,0 +1,132 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 gate_ptr,
+    .param .u64 value_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %g,%v,%o,%off;
+    .reg .b32 %t,%b,%i,%gp<4>,%vp<4>,%op<4>;
+    .reg .b16 %h<6>;
+    .reg .f32 %f<6>;
+
+    // Each thread handles eight contiguous elements of its 1024-element tile.
+    ld.param.u64 %g,[gate_ptr];
+    ld.param.u64 %v,[value_ptr];
+    ld.param.u64 %o,[output_ptr];
+    mov.u32 %t,%tid.x;
+    mov.u32 %b,%ctaid.x;
+    shl.b32 %i,%b,11;
+    mad.lo.u32 %i,%t,16,%i;
+    cvt.u64.u32 %off,%i;
+    add.u64 %g,%g,%off;
+    add.u64 %v,%v,%off;
+    add.u64 %o,%o,%off;
+
+    // Load each aligned eight-half vector once; the tile has no masked elements.
+    ld.global.v4.b32 {%gp0,%gp1,%gp2,%gp3},[%g];
+    ld.global.v4.b32 {%vp0,%vp1,%vp2,%vp3},[%v];
+
+    // Convert the first pair and evaluate gate / (1 + exp(-gate)) * value.
+    mov.b32 {%h0,%h1},%gp0;
+    mov.b32 {%h2,%h3},%vp0;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f1,%h1;
+    cvt.f32.f16 %f2,%h2;
+    cvt.f32.f16 %f3,%h3;
+    mul.f32 %f4,%f0,0fBFB8AA3B;
+    mul.f32 %f5,%f1,0fBFB8AA3B;
+    ex2.approx.f32 %f4,%f4;
+    ex2.approx.f32 %f5,%f5;
+    add.f32 %f4,%f4,0f3F800000;
+    add.f32 %f5,%f5,0f3F800000;
+    rcp.approx.f32 %f4,%f4;
+    rcp.approx.f32 %f5,%f5;
+    mul.f32 %f0,%f0,%f4;
+    mul.f32 %f1,%f1,%f5;
+    mul.f32 %f0,%f0,%f2;
+    mul.f32 %f1,%f1,%f3;
+    cvt.rn.f16.f32 %h4,%f0;
+    cvt.rn.f16.f32 %h5,%f1;
+    mov.b32 %op0,{%h4,%h5};
+
+    // Evaluate and pack the second pair using the same float32 arithmetic.
+    mov.b32 {%h0,%h1},%gp1;
+    mov.b32 {%h2,%h3},%vp1;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f1,%h1;
+    cvt.f32.f16 %f2,%h2;
+    cvt.f32.f16 %f3,%h3;
+    mul.f32 %f4,%f0,0fBFB8AA3B;
+    mul.f32 %f5,%f1,0fBFB8AA3B;
+    ex2.approx.f32 %f4,%f4;
+    ex2.approx.f32 %f5,%f5;
+    add.f32 %f4,%f4,0f3F800000;
+    add.f32 %f5,%f5,0f3F800000;
+    rcp.approx.f32 %f4,%f4;
+    rcp.approx.f32 %f5,%f5;
+    mul.f32 %f0,%f0,%f4;
+    mul.f32 %f1,%f1,%f5;
+    mul.f32 %f0,%f0,%f2;
+    mul.f32 %f1,%f1,%f3;
+    cvt.rn.f16.f32 %h4,%f0;
+    cvt.rn.f16.f32 %h5,%f1;
+    mov.b32 %op1,{%h4,%h5};
+
+    // Evaluate and pack the third pair.
+    mov.b32 {%h0,%h1},%gp2;
+    mov.b32 {%h2,%h3},%vp2;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f1,%h1;
+    cvt.f32.f16 %f2,%h2;
+    cvt.f32.f16 %f3,%h3;
+    mul.f32 %f4,%f0,0fBFB8AA3B;
+    mul.f32 %f5,%f1,0fBFB8AA3B;
+    ex2.approx.f32 %f4,%f4;
+    ex2.approx.f32 %f5,%f5;
+    add.f32 %f4,%f4,0f3F800000;
+    add.f32 %f5,%f5,0f3F800000;
+    rcp.approx.f32 %f4,%f4;
+    rcp.approx.f32 %f5,%f5;
+    mul.f32 %f0,%f0,%f4;
+    mul.f32 %f1,%f1,%f5;
+    mul.f32 %f0,%f0,%f2;
+    mul.f32 %f1,%f1,%f3;
+    cvt.rn.f16.f32 %h4,%f0;
+    cvt.rn.f16.f32 %h5,%f1;
+    mov.b32 %op2,{%h4,%h5};
+
+    // Evaluate and pack the fourth pair.
+    mov.b32 {%h0,%h1},%gp3;
+    mov.b32 {%h2,%h3},%vp3;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f1,%h1;
+    cvt.f32.f16 %f2,%h2;
+    cvt.f32.f16 %f3,%h3;
+    mul.f32 %f4,%f0,0fBFB8AA3B;
+    mul.f32 %f5,%f1,0fBFB8AA3B;
+    ex2.approx.f32 %f4,%f4;
+    ex2.approx.f32 %f5,%f5;
+    add.f32 %f4,%f4,0f3F800000;
+    add.f32 %f5,%f5,0f3F800000;
+    rcp.approx.f32 %f4,%f4;
+    rcp.approx.f32 %f5,%f5;
+    mul.f32 %f0,%f0,%f4;
+    mul.f32 %f1,%f1,%f5;
+    mul.f32 %f0,%f0,%f2;
+    mul.f32 %f1,%f1,%f3;
+    cvt.rn.f16.f32 %h4,%f0;
+    cvt.rn.f16.f32 %h5,%f1;
+    mov.b32 %op3,{%h4,%h5};
+
+    // Store all eight rounded half results in one aligned vector operation.
+    st.global.v4.b32 [%o],{%op0,%op1,%op2,%op3};
+    ret;
+}

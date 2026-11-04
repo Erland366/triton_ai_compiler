@@ -1,0 +1,31 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<12>;\n    .reg .b64 %rd<5>;\n    .reg .b16 %h<12>;\n    .reg .f32 %x<8>, %e<8>;\n\n    // Each thread owns eight contiguous elements of the 1024-element tile.\n    ld.param.u64 %rd0, [x_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    shl.b32 %r1, %r1, 3;\n    mad.lo.u32 %r2, %r0, 1024, %r1;\n    cvt.u64.u32 %rd2, %r2;\n    add.u64 %rd0, %rd0, %rd2;\n    shl.b64 %rd2, %rd2, 1;\n    add.u64 %rd1, %rd1, %rd2;\n\n    // Load eight bytes and decode four packed FP8 pairs exactly.\n    ld.global.v2.b32 {%r3,%r4}, [%rd0];\n    mov.b32 {%h0,%h1}, %r3;\n    mov.b32 {%h2,%h3}, %r4;\n    cvt.rn.f16x2.e4m3x2 %r5, %h0;\n    cvt.rn.f16x2.e4m3x2 %r6, %h1;\n    cvt.rn.f16x2.e4m3x2 %r7, %h2;\n    cvt.rn.f16x2.e4m3x2 %r8, %h3;\n    mov.b32 {%h4,%h5}, %r5;\n    mov.b32 {%h6,%h7}, %r6;\n    mov.b32 {%h8,%h9}, %r7;\n    mov.b32 {%h10,%h11}, %r8;\n    cvt.f32.f16 %x0, %h4;\n    cvt.f32.f16 %x1, %h5;\n    cvt.f32.f16 %x2, %h6;\n    cvt.f32.f16 %x3, %h7;\n    cvt.f32.f16 %x4, %h8;\n    cvt.f32.f16 %x5, %h9;\n    cvt.f32.f16 %x6, %h10;\n    cvt.f32.f16 %x7, %h11;\n\n    // Compute exp(-x) using base-two exponentials in FP32.\n    mul.f32 %e0, %x0, 0fBFB8AA3B;\n    mul.f32 %e1, %x1, 0fBFB8AA3B;\n    mul.f32 %e2, %x2, 0fBFB8AA3B;\n    mul.f32 %e3, %x3, 0fBFB8AA3B;\n    mul.f32 %e4, %x4, 0fBFB8AA3B;\n    mul.f32 %e5, %x5, 0fBFB8AA3B;\n    mul.f32 %e6, %x6, 0fBFB8AA3B;\n    mul.f32 %e7, %x7, 0fBFB8AA3B;\n    ex2.approx.f32 %e0, %e0;\n    ex2.approx.f32 %e1, %e1;\n    ex2.approx.f32 %e2, %e2;\n    ex2.approx.f32 %e3, %e3;\n    ex2.approx.f32 %e4, %e4;\n    ex2.approx.f32 %e5, %e5;\n    ex2.approx.f32 %e6, %e6;\n    ex2.approx.f32 %e7, %e7;\n\n    // Form the reciprocal denominators for eight independent values.\n    add.f32 %e0, %e0, 0f3F800000;\n    add.f32 %e1, %e1, 0f3F800000;\n    add.f32 %e2, %e2, 0f3F800000;\n    add.f32 %e3, %e3, 0f3F800000;\n    add.f32 %e4, %e4, 0f3F800000;\n    add.f32 %e5, %e5, 0f3F800000;\n    add.f32 %e6, %e6, 0f3F800000;\n    add.f32 %e7, %e7, 0f3F800000;\n    rcp.approx.f32 %e0, %e0;\n    rcp.approx.f32 %e1, %e1;\n    rcp.approx.f32 %e2, %e2;\n    rcp.approx.f32 %e3, %e3;\n    rcp.approx.f32 %e4, %e4;\n    rcp.approx.f32 %e5, %e5;\n    rcp.approx.f32 %e6, %e6;\n    rcp.approx.f32 %e7, %e7;\n\n    // Multiply by x to complete x / (1 + exp(-x)).\n    mul.f32 %x0, %x0, %e0;\n    mul.f32 %x1, %x1, %e1;\n    mul.f32 %x2, %x2, %e2;\n    mul.f32 %x3, %x3, %e3;\n    mul.f32 %x4, %x4, %e4;\n    mul.f32 %x5, %x5, %e5;\n    mul.f32 %x6, %x6, %e6;\n    mul.f32 %x7, %x7, %e7;\n\n    // Round to FP16 and store eight outputs in their original order.\n    cvt.rn.f16x2.f32 %r5, %x1, %x0;\n    cvt.rn.f16x2.f32 %r6, %x3, %x2;\n    cvt.rn.f16x2.f32 %r7, %x5, %x4;\n    cvt.rn.f16x2.f32 %r8, %x7, %x6;\n    st.global.v4.b32 [%rd1], {%r5,%r6,%r7,%r8};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 1.0,
+  "p50": 0.0071680000983178616,
+  "autotune_metrics": {
+    "operator": "SiLUFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.006833855465859924,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.501212,
+  "max_budget_usd": 3.0
+}

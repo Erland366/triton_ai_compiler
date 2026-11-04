@@ -1,0 +1,58 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<14>;
+    .reg .b64 %rd<4>;
+    .reg .f32 %f<9>;
+    .reg .pred %p;
+
+    // Partition this 2048-element tile across the four launched warps.
+    ld.param.u64 %rd0, [x_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    mad.lo.u32 %r3, %r2, 2, %r1;
+    mad.lo.u32 %r3, %r3, 256, %r0;
+    mad.wide.u32 %rd1, %r3, 16, %rd0;
+
+    // Read all sixteen halves assigned to each thread with aligned vector loads.
+    ld.global.nc.v4.b32 {%r5, %r6, %r7, %r8}, [%rd1];
+    ld.global.nc.v4.b32 {%r9, %r10, %r11, %r12}, [%rd1+2048];
+
+    // Multiplication by one reduces the half inputs into float32 row sums.
+    mov.b32 %r13, 0x3c003c00;
+    mov.f32 %f8, 0f00000000;
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%f0, %f1, %f2, %f3}, {%r5, %r6, %r7, %r8}, {%r13, %r13}, {%f8, %f8, %f8, %f8};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%f4, %f5, %f6, %f7}, {%r9, %r10, %r11, %r12}, {%r13, %r13}, {%f8, %f8, %f8, %f8};
+
+    // Sum distinct MMA rows without counting the duplicate output columns.
+    add.f32 %f0, %f0, %f2;
+    add.f32 %f4, %f4, %f6;
+    add.f32 %f0, %f0, %f4;
+    shfl.sync.bfly.b32 %f8, %f0, 16, 31, 0xffffffff;
+    add.f32 %f0, %f0, %f8;
+    shfl.sync.bfly.b32 %f8, %f0, 8, 31, 0xffffffff;
+    add.f32 %f0, %f0, %f8;
+    shfl.sync.bfly.b32 %f8, %f0, 4, 31, 0xffffffff;
+    add.f32 %f0, %f0, %f8;
+
+    // Each warp leader atomically contributes its disjoint 512-element sum.
+    and.b32 %r4, %r0, 31;
+    setp.ne.u32 %p, %r4, 0;
+    @%p bra DONE;
+    ld.param.u64 %rd2, [output_ptr];
+    mad.wide.u32 %rd3, %r2, 4, %rd2;
+    red.relaxed.gpu.global.add.f32 [%rd3], %f0;
+DONE:
+    ret;
+}

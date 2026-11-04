@@ -1,0 +1,41 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %t, %b, %i, %v, %a, %c;
+    .reg .b16 %lo, %hi;
+    .reg .b64 %x, %y, %off, %xp, %yp;
+
+    // Map all 512 threads to four consecutive elements each, without masks.
+    ld.param.u64 %x, [x_ptr];
+    ld.param.u64 %y, [output_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %b, %ctaid.x;
+    shl.b32 %i, %b, 11;
+    mad.lo.u32 %i, %t, 4, %i;
+
+    // Form byte addresses for FP8 input and FP16 output.
+    cvt.u64.u32 %off, %i;
+    add.u64 %xp, %x, %off;
+    shl.b64 %off, %off, 1;
+    add.u64 %yp, %y, %off;
+
+    // Load four FP8 values and convert with fused ReLU, preserving NaNs.
+    ld.global.u32 %v, [%xp];
+    mov.b32 {%lo, %hi}, %v;
+    cvt.rn.relu.f16x2.e4m3x2 %a, %lo;
+    cvt.rn.relu.f16x2.e4m3x2 %c, %hi;
+
+    // Write four adjacent half-precision results in one vector store.
+    st.global.v2.u32 [%yp], {%a, %c};
+    ret;
+}

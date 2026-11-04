@@ -1,0 +1,86 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<5>;
+    .reg .b16 %h<4>;
+    .reg .f32 %f<18>;
+
+    // Map 128 threads onto adjacent pairs in each 256-element program tile.
+    ld.param.u64 %rd0,[x_ptr];
+    ld.param.u64 %rd1,[output_ptr];
+    mov.u32 %r0,%ctaid.x;
+    mov.u32 %r1,%tid.x;
+    shl.b32 %r0,%r0,8;
+    mad.lo.u32 %r0,%r1,2,%r0;
+    mul.wide.u32 %rd2,%r0,2;
+    add.u64 %rd3,%rd0,%rd2;
+    add.u64 %rd4,%rd1,%rd2;
+
+    // Read two contiguous half values and promote them to float.
+    ld.global.b32 %r2,[%rd3];
+    mov.b32 {%h0,%h1},%r2;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f10,%h1;
+
+    // Evaluate erf(x/sqrt(2)) using a polynomial times exp(-x*x/2).
+    mul.f32 %f1,%f0,0.7071067811865476;
+    abs.f32 %f2,%f1;
+    fma.rn.f32 %f3,%f2,0.3275911,1.0;
+    rcp.approx.ftz.f32 %f3,%f3;
+    fma.rn.f32 %f4,%f3,1.061405429,-1.453152027;
+    fma.rn.f32 %f4,%f4,%f3,1.421413741;
+    fma.rn.f32 %f4,%f4,%f3,-0.284496736;
+    fma.rn.f32 %f4,%f4,%f3,0.254829592;
+    mul.f32 %f4,%f4,%f3;
+    mul.f32 %f5,%f1,%f1;
+    mul.f32 %f5,%f5,-1.4426950408889634;
+    ex2.approx.ftz.f32 %f5,%f5;
+    neg.f32 %f4,%f4;
+    fma.rn.f32 %f6,%f4,%f5,1.0;
+    copysign.f32 %f6,%f1,%f6;
+
+    // Preserve the GELU multiplication order and round once to half.
+    add.f32 %f6,%f6,1.0;
+    mul.f32 %f7,%f0,0.5;
+    mul.f32 %f7,%f7,%f6;
+    cvt.rn.f16.f32 %h2,%f7;
+
+    // Evaluate the second independent erf with the same float operations.
+    mul.f32 %f11,%f10,0.7071067811865476;
+    abs.f32 %f12,%f11;
+    fma.rn.f32 %f13,%f12,0.3275911,1.0;
+    rcp.approx.ftz.f32 %f13,%f13;
+    fma.rn.f32 %f14,%f13,1.061405429,-1.453152027;
+    fma.rn.f32 %f14,%f14,%f13,1.421413741;
+    fma.rn.f32 %f14,%f14,%f13,-0.284496736;
+    fma.rn.f32 %f14,%f14,%f13,0.254829592;
+    mul.f32 %f14,%f14,%f13;
+    mul.f32 %f15,%f11,%f11;
+    mul.f32 %f15,%f15,-1.4426950408889634;
+    ex2.approx.ftz.f32 %f15,%f15;
+    neg.f32 %f14,%f14;
+    fma.rn.f32 %f16,%f14,%f15,1.0;
+    copysign.f32 %f16,%f11,%f16;
+
+    // Finish GELU for the second value.
+    add.f32 %f16,%f16,1.0;
+    mul.f32 %f17,%f10,0.5;
+    mul.f32 %f17,%f17,%f16;
+    cvt.rn.f16.f32 %h3,%f17;
+
+    // Store the entire tile with packed writes; the source has no mask.
+    mov.b32 %r3,{%h2,%h3};
+    st.global.b32 [%rd4],%r3;
+    ret;
+}

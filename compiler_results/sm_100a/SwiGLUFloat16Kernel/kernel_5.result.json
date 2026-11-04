@@ -1,0 +1,28 @@
+{
+  "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 gate_ptr,\n    .param .u64 value_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %g,%v,%o,%off;\n    .reg .b32 %t,%b,%a<4>,%c<4>,%r<4>;\n    .reg .b16 %h<16>;\n    .reg .f32 %f<8>,%w<8>,%e<8>;\n\n    // Each thread owns eight contiguous elements, covering the full tile.\n    ld.param.u64 %g,[gate_ptr];\n    ld.param.u64 %v,[value_ptr];\n    ld.param.u64 %o,[output_ptr];\n    mov.u32 %t,%tid.x;\n    mov.u32 %b,%ctaid.x;\n    shl.b32 %b,%b,11;\n    mad.lo.u32 %t,%t,16,%b;\n    cvt.u64.u32 %off,%t;\n    add.u64 %g,%g,%off;\n    add.u64 %v,%v,%off;\n    add.u64 %o,%o,%off;\n\n    // Fetch aligned vectors; this exact shape requires no boundary mask.\n    ld.global.v4.b32 {%a0,%a1,%a2,%a3},[%g];\n    ld.global.v4.b32 {%c0,%c1,%c2,%c3},[%v];\n\n    // Unpack half inputs and promote all arithmetic to float32.\n    mov.b32 {%h0,%h1},%a0;\n    mov.b32 {%h2,%h3},%a1;\n    mov.b32 {%h4,%h5},%a2;\n    mov.b32 {%h6,%h7},%a3;\n    mov.b32 {%h8,%h9},%c0;\n    mov.b32 {%h10,%h11},%c1;\n    mov.b32 {%h12,%h13},%c2;\n    mov.b32 {%h14,%h15},%c3;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f1,%h1;\n    cvt.f32.f16 %f2,%h2;\n    cvt.f32.f16 %f3,%h3;\n    cvt.f32.f16 %f4,%h4;\n    cvt.f32.f16 %f5,%h5;\n    cvt.f32.f16 %f6,%h6;\n    cvt.f32.f16 %f7,%h7;\n    cvt.f32.f16 %w0,%h8;\n    cvt.f32.f16 %w1,%h9;\n    cvt.f32.f16 %w2,%h10;\n    cvt.f32.f16 %w3,%h11;\n    cvt.f32.f16 %w4,%h12;\n    cvt.f32.f16 %w5,%h13;\n    cvt.f32.f16 %w6,%h14;\n    cvt.f32.f16 %w7,%h15;\n\n    // Compute exp(-gate) using the base-two exponential unit.\n    mul.f32 %e0,%f0,0fBFB8AA3B;\n    mul.f32 %e1,%f1,0fBFB8AA3B;\n    mul.f32 %e2,%f2,0fBFB8AA3B;\n    mul.f32 %e3,%f3,0fBFB8AA3B;\n    mul.f32 %e4,%f4,0fBFB8AA3B;\n    mul.f32 %e5,%f5,0fBFB8AA3B;\n    mul.f32 %e6,%f6,0fBFB8AA3B;\n    mul.f32 %e7,%f7,0fBFB8AA3B;\n    ex2.approx.f32 %e0,%e0;\n    ex2.approx.f32 %e1,%e1;\n    ex2.approx.f32 %e2,%e2;\n    ex2.approx.f32 %e3,%e3;\n    ex2.approx.f32 %e4,%e4;\n    ex2.approx.f32 %e5,%e5;\n    ex2.approx.f32 %e6,%e6;\n    ex2.approx.f32 %e7,%e7;\n\n    // Form the sigmoid denominator and take its reciprocal.\n    add.f32 %e0,%e0,0f3F800000;\n    add.f32 %e1,%e1,0f3F800000;\n    add.f32 %e2,%e2,0f3F800000;\n    add.f32 %e3,%e3,0f3F800000;\n    add.f32 %e4,%e4,0f3F800000;\n    add.f32 %e5,%e5,0f3F800000;\n    add.f32 %e6,%e6,0f3F800000;\n    add.f32 %e7,%e7,0f3F800000;\n    rcp.approx.f32 %e0,%e0;\n    rcp.approx.f32 %e1,%e1;\n    rcp.approx.f32 %e2,%e2;\n    rcp.approx.f32 %e3,%e3;\n    rcp.approx.f32 %e4,%e4;\n    rcp.approx.f32 %e5,%e5;\n    rcp.approx.f32 %e6,%e6;\n    rcp.approx.f32 %e7,%e7;\n\n    // Apply the gate and then the value, preserving operation order.\n    mul.f32 %f0,%f0,%e0;\n    mul.f32 %f1,%f1,%e1;\n    mul.f32 %f2,%f2,%e2;\n    mul.f32 %f3,%f3,%e3;\n    mul.f32 %f4,%f4,%e4;\n    mul.f32 %f5,%f5,%e5;\n    mul.f32 %f6,%f6,%e6;\n    mul.f32 %f7,%f7,%e7;\n    mul.f32 %f0,%f0,%w0;\n    mul.f32 %f1,%f1,%w1;\n    mul.f32 %f2,%f2,%w2;\n    mul.f32 %f3,%f3,%w3;\n    mul.f32 %f4,%f4,%w4;\n    mul.f32 %f5,%f5,%w5;\n    mul.f32 %f6,%f6,%w6;\n    mul.f32 %f7,%f7,%w7;\n\n    // Round and pack pairs, then issue one vector store per thread.\n    cvt.rn.f16x2.f32 %r0,%f1,%f0;\n    cvt.rn.f16x2.f32 %r1,%f3,%f2;\n    cvt.rn.f16x2.f32 %r2,%f5,%f4;\n    cvt.rn.f16x2.f32 %r3,%f7,%f6;\n    st.global.v4.b32 [%o],{%r0,%r1,%r2,%r3};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 1.0003113833379238,
+  "p50": 0.008221440203487872,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat16Kernel",
+    "constexpr_values": {},
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.008101519765018545,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.4065415
+}

@@ -1,0 +1,79 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 input_ptr,\n    .param .u64 cos_ptr,\n    .param .u64 sin_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %p;\n    .reg .b16 %h<5>;\n    .reg .b32 %r<6>;\n    .reg .b64 %rd<8>;\n    .reg .f32 %f<6>;\n\n    // Read the four used pointers and leave both ABI dummy arguments untouched.\n    ld.param.u64 %rd0, [input_ptr];\n    ld.param.u64 %rd1, [cos_ptr];\n    ld.param.u64 %rd2, [sin_ptr];\n    ld.param.u64 %rd3, [output_ptr];\n\n    // The complete 128-thread block covers one row of 128 half-precision features.\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    shl.b32 %r2, %r1, 1;\n    mad.lo.u32 %r3, %r0, 256, %r2;\n    xor.b32 %r4, %r3, 128;\n    mad.wide.u32 %rd4, %r3, 1, %rd0;\n    mad.wide.u32 %rd5, %r4, 1, %rd0;\n\n    // The low 16 byte-offset bits select position=row%256 and the same feature.\n    and.b32 %r5, %r3, 65535;\n    mad.wide.u32 %rd6, %r5, 1, %rd1;\n    mad.wide.u32 %rd7, %r5, 1, %rd2;\n    setp.lt.u32 %p, %r1, 64;\n\n    // Stream the large input while retaining the small coefficient tables in L1.\n    ld.global.L1::evict_first.b16 %h0, [%rd4];\n    ld.global.L1::evict_first.b16 %h1, [%rd5];\n    ld.global.L1::evict_last.b16 %h2, [%rd6];\n    ld.global.L1::evict_last.b16 %h3, [%rd7];\n    @%p xor.b16 %h1, %h1, 0x8000;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n\n    // Perform both products and their sum in FP32, then round to FP16.\n    mul.f32 %f4, %f1, %f3;\n    fma.rn.f32 %f5, %f0, %f2, %f4;\n    cvt.rn.f16.f32 %h4, %f5;\n\n    // Write each output feature once; no masks or shared memory are needed.\n    mad.wide.u32 %rd4, %r3, 1, %rd3;\n    st.global.cs.b16 [%rd4], %h4;\n    ret;\n}\n",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": []
+  },
+  "evaluation": {
+    "kernel_name": "RoPEFloat16Kernel",
+    "git_commit_hash": "0208f9212bc1f8db337737ef76dcf75c63d8014c",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 2.767539816856384,
+    "triton_p50": 2.7767071986198424,
+    "triton_p80": 2.7794179735183717,
+    "triton_p90": 2.781755392551422,
+    "triton_p95": 2.7824728178977964,
+    "triton_p99": 2.782929692983627,
+    "p20": 2.7211613502502443,
+    "p50": 2.7214694380760194,
+    "p80": 2.7221857347488405,
+    "p90": 2.722941439628601,
+    "p95": 2.7242344398498535,
+    "p99": 2.7250712911605834,
+    "speedup_vs_triton": 1.0202970350395977,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas -arch=sm_90a -v --warning-as-error /tmp/triton-ptxas-8bkb3elk/kernel.ptx -o /tmp/triton-ptxas-8bkb3elk/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas info    : 0 bytes gmem\nptxas info    : Compiling entry function 'kernel' for 'sm_90a'\nptxas info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas info    : Used 15 registers, used 0 barriers\nptxas info    : Compile time = 3.027 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "RoPEFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 128
+    },
+    "selected_config": {
+      "block_size": 128,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 128,
+        "num_warps": 4
+      },
+      "latency_ms": 2.724941160164627,
+      "evaluated_configurations": 3,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA H100 PCIe",
+  "run_cost_usd_so_far": 1.929937
+}

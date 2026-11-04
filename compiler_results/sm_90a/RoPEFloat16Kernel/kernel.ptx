@@ -1,0 +1,63 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 input_ptr,
+    .param .u64 cos_ptr,
+    .param .u64 sin_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p;
+    .reg .b16 %h<5>;
+    .reg .b32 %r<6>;
+    .reg .b64 %rd<8>;
+    .reg .f32 %f<6>;
+
+    // Read the four used pointers and leave both ABI dummy arguments untouched.
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [cos_ptr];
+    ld.param.u64 %rd2, [sin_ptr];
+    ld.param.u64 %rd3, [output_ptr];
+
+    // The complete 128-thread block covers one row of 128 half-precision features.
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    shl.b32 %r2, %r1, 1;
+    mad.lo.u32 %r3, %r0, 256, %r2;
+    xor.b32 %r4, %r3, 128;
+    mad.wide.u32 %rd4, %r3, 1, %rd0;
+    mad.wide.u32 %rd5, %r4, 1, %rd0;
+
+    // The low 16 byte-offset bits select position=row%256 and the same feature.
+    and.b32 %r5, %r3, 65535;
+    mad.wide.u32 %rd6, %r5, 1, %rd1;
+    mad.wide.u32 %rd7, %r5, 1, %rd2;
+    setp.lt.u32 %p, %r1, 64;
+
+    // Stream the large input while retaining the small coefficient tables in L1.
+    ld.global.L1::evict_first.b16 %h0, [%rd4];
+    ld.global.L1::evict_first.b16 %h1, [%rd5];
+    ld.global.L1::evict_last.b16 %h2, [%rd6];
+    ld.global.L1::evict_last.b16 %h3, [%rd7];
+    @%p xor.b16 %h1, %h1, 0x8000;
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+    cvt.f32.f16 %f2, %h2;
+    cvt.f32.f16 %f3, %h3;
+
+    // Perform both products and their sum in FP32, then round to FP16.
+    mul.f32 %f4, %f1, %f3;
+    fma.rn.f32 %f5, %f0, %f2, %f4;
+    cvt.rn.f16.f32 %h4, %f5;
+
+    // Write each output feature once; no masks or shared memory are needed.
+    mad.wide.u32 %rd4, %r3, 1, %rd3;
+    st.global.cs.b16 [%rd4], %h4;
+    ret;
+}

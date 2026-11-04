@@ -1,0 +1,82 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n// Evaluate GELU in float32 before rounding to half precision.\n.func (.param .b32 out) gelu(.param .b32 in)\n{\n    .reg .b32 %bits;\n    .reg .b16 %h, %unused, %o;\n    .reg .f32 %v, %z, %t, %p, %e, %r, %s;\n    .reg .pred %neg;\n\n    // Unpack the input half and convert it to float32.\n    ld.param.b32 %bits, [in];\n    mov.b32 {%h, %unused}, %bits;\n    cvt.f32.f16 %v, %h;\n\n    // Approximate erf using a reciprocal polynomial and an exponential.\n    mul.f32 %z, %v, 0f3F3504F3;\n    setp.lt.f32 %neg, %z, 0f00000000;\n    abs.f32 %z, %z;\n    fma.rn.f32 %t, %z, 0f3EA7BA05, 0f3F800000;\n    rcp.approx.ftz.f32 %t, %t;\n    mov.f32 %p, 0f3F87DC22;\n    fma.rn.f32 %p, %p, %t, 0fBFBA00E3;\n    fma.rn.f32 %p, %p, %t, 0f3FB5F0E3;\n    fma.rn.f32 %p, %p, %t, 0fBE91A98E;\n    fma.rn.f32 %p, %p, %t, 0f3E827906;\n    mul.f32 %p, %p, %t;\n    mul.f32 %e, %z, %z;\n    mul.f32 %e, %e, 0fBFB8AA3B;\n    ex2.approx.ftz.f32 %e, %e;\n    neg.f32 %p, %p;\n    fma.rn.f32 %r, %p, %e, 0f3F800000;\n    neg.f32 %s, %r;\n    selp.f32 %r, %s, %r, %neg;\n\n    // Preserve the float32 addition and products before half conversion.\n    add.f32 %r, %r, 0f3F800000;\n    mul.f32 %v, %v, 0f3F000000;\n    mul.f32 %r, %v, %r;\n    cvt.rn.f16.f32 %o, %r;\n    mov.b32 %bits, {%o, %unused};\n    st.param.b32 [out], %bits;\n    ret;\n}\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %x, %y, %off, %a, %b;\n    .reg .b32 %lane, %pid, %idx, %v<4>, %r<4>, %pack<2>;\n    .reg .b16 %h<4>, %u;\n    .param .b32 arg, res;\n\n    // Four adjacent halves per thread cover the complete 1024-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %lane, %tid.x;\n    mov.u32 %pid, %ctaid.x;\n    mad.lo.u32 %idx, %pid, 256, %lane;\n    mul.wide.u32 %off, %idx, 8;\n    add.u64 %a, %x, %off;\n    add.u64 %b, %y, %off;\n\n    // Load four contiguous halves; the original kernel has no boundary mask.\n    ld.global.v2.b32 {%v0, %v2}, [%a];\n    shr.u32 %v1, %v0, 16;\n    shr.u32 %v3, %v2, 16;\n\n    // Independent evaluations expose instruction-level parallelism after inlining.\n    st.param.b32 [arg], %v0;\n    call.uni (res), gelu, (arg);\n    ld.param.b32 %r0, [res];\n    st.param.b32 [arg], %v1;\n    call.uni (res), gelu, (arg);\n    ld.param.b32 %r1, [res];\n    st.param.b32 [arg], %v2;\n    call.uni (res), gelu, (arg);\n    ld.param.b32 %r2, [res];\n    st.param.b32 [arg], %v3;\n    call.uni (res), gelu, (arg);\n    ld.param.b32 %r3, [res];\n\n    // Pack the four half results and issue one vector store.\n    mov.b32 {%h0, %u}, %r0;\n    mov.b32 {%h1, %u}, %r1;\n    mov.b32 {%h2, %u}, %r2;\n    mov.b32 {%h3, %u}, %r3;\n    mov.b32 %pack0, {%h0, %h1};\n    mov.b32 %pack1, {%h2, %h3};\n    st.global.v2.b32 [%b], {%pack0, %pack1};\n    ret;\n}\n",
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": [
+      "An initial register named %tid shadowed the special register; renaming it resolved the compiler error."
+    ]
+  },
+  "evaluation": {
+    "kernel_name": "GELUFloat16Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007046400010585785,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.00723712008446455,
+    "triton_p90": 0.007323519950732589,
+    "triton_p95": 0.008130560182034969,
+    "triton_p99": 0.008305279910564423,
+    "p20": 0.0070438400283455846,
+    "p50": 0.007135999854654074,
+    "p80": 0.0072441600356251004,
+    "p90": 0.007327999947592616,
+    "p95": 0.008142752069048582,
+    "p99": 0.008331001699902118,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-1vsr5zzo/kernel.ptx -o /tmp/triton-ptxas-1vsr5zzo/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 15 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 3.729 ms\nptxas-blackwell info    : Function properties for gelu\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "GELUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.007213468897869379,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.49035850000000003
+}

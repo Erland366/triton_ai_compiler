@@ -1,0 +1,33 @@
+{
+  "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i, %v, %a, %c;\n    .reg .b16 %lo, %hi;\n    .reg .b64 %x, %y, %off, %xp, %yp;\n\n    // Map all 512 threads to four consecutive elements each, without masks.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    shl.b32 %i, %b, 11;\n    mad.lo.u32 %i, %t, 4, %i;\n\n    // Form byte addresses for FP8 input and FP16 output.\n    cvt.u64.u32 %off, %i;\n    add.u64 %xp, %x, %off;\n    shl.b64 %off, %off, 1;\n    add.u64 %yp, %y, %off;\n\n    // Load four FP8 values and convert with fused ReLU, preserving NaNs.\n    ld.global.u32 %v, [%xp];\n    mov.b32 {%lo, %hi}, %v;\n    cvt.rn.relu.f16x2.e4m3x2 %a, %lo;\n    cvt.rn.relu.f16x2.e4m3x2 %c, %hi;\n\n    // Write four adjacent half-precision results in one vector store.\n    st.global.v2.u32 [%yp], {%a, %c};\n    ret;\n}",
+  "num_threads_x": 512,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "ptxas rejected an immediate-zero operand for max.NaN.f16x2; fused ReLU conversion avoids that instruction."
+  ],
+  "speedup": 0.998212863876763,
+  "p50": 0.006446080058813095,
+  "autotune_metrics": {
+    "operator": "ReLUFloat8Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 16
+      },
+      "latency_ms": 0.006361883206728057,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA H100 80GB HBM3",
+  "run_cost_usd_so_far": 0.3735975
+}

@@ -1,0 +1,31 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 gate_ptr,\n    .param .u64 value_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t,%b,%i,%gp<2>,%vp<2>,%op<2>;\n    .reg .b64 %g,%v,%o,%off;\n    .reg .b16 %gh<4>,%vh<4>,%oh<4>;\n    .reg .f32 %gf<4>,%vf<4>,%e<4>,%d<4>,%r<4>;\n\n    // Each thread handles four adjacent elements of the 512-element tile.\n    ld.param.u64 %g,[gate_ptr];\n    ld.param.u64 %v,[value_ptr];\n    ld.param.u64 %o,[output_ptr];\n    mov.u32 %t,%tid.x;\n    mov.u32 %b,%ctaid.x;\n    mad.lo.u32 %i,%b,128,%t;\n    mul.wide.u32 %off,%i,8;\n    add.u64 %g,%g,%off;\n    add.u64 %v,%v,%off;\n    add.u64 %o,%o,%off;\n\n    // Load four half values from each input with aligned vector loads.\n    ld.global.v2.b32 {%gp0,%gp1},[%g];\n    ld.global.v2.b32 {%vp0,%vp1},[%v];\n    mov.b32 {%gh0,%gh1},%gp0;\n    mov.b32 {%gh2,%gh3},%gp1;\n    mov.b32 {%vh0,%vh1},%vp0;\n    mov.b32 {%vh2,%vh3},%vp1;\n\n    // Promote both inputs to single precision.\n    cvt.f32.f16 %gf0,%gh0;\n    cvt.f32.f16 %gf1,%gh1;\n    cvt.f32.f16 %gf2,%gh2;\n    cvt.f32.f16 %gf3,%gh3;\n    cvt.f32.f16 %vf0,%vh0;\n    cvt.f32.f16 %vf1,%vh1;\n    cvt.f32.f16 %vf2,%vh2;\n    cvt.f32.f16 %vf3,%vh3;\n\n    // Evaluate exp(-gate) using multiplication by -log2(e).\n    mul.f32 %e0,%gf0,0fBFB8AA3B;\n    mul.f32 %e1,%gf1,0fBFB8AA3B;\n    mul.f32 %e2,%gf2,0fBFB8AA3B;\n    mul.f32 %e3,%gf3,0fBFB8AA3B;\n    ex2.approx.f32 %e0,%e0;\n    ex2.approx.f32 %e1,%e1;\n    ex2.approx.f32 %e2,%e2;\n    ex2.approx.f32 %e3,%e3;\n\n    // Form the four sigmoid denominators.\n    add.f32 %d0,%e0,0f3F800000;\n    add.f32 %d1,%e1,0f3F800000;\n    add.f32 %d2,%e2,0f3F800000;\n    add.f32 %d3,%e3,0f3F800000;\n\n    // Divide the gate by the denominator, then multiply by value.\n    rcp.approx.f32 %r0,%d0;\n    rcp.approx.f32 %r1,%d1;\n    rcp.approx.f32 %r2,%d2;\n    rcp.approx.f32 %r3,%d3;\n    mul.f32 %r0,%gf0,%r0;\n    mul.f32 %r1,%gf1,%r1;\n    mul.f32 %r2,%gf2,%r2;\n    mul.f32 %r3,%gf3,%r3;\n    mul.f32 %r0,%r0,%vf0;\n    mul.f32 %r1,%r1,%vf1;\n    mul.f32 %r2,%r2,%vf2;\n    mul.f32 %r3,%r3,%vf3;\n\n    // Round to half precision and pack adjacent outputs.\n    cvt.rn.f16.f32 %oh0,%r0;\n    cvt.rn.f16.f32 %oh1,%r1;\n    cvt.rn.f16.f32 %oh2,%r2;\n    cvt.rn.f16.f32 %oh3,%r3;\n    mov.b32 %op0,{%oh0,%oh1};\n    mov.b32 %op1,{%oh2,%oh3};\n\n    // All 512 elements are valid; no boundary mask is needed.\n    st.global.v2.b32 [%o],{%op0,%op1};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 0.9989598202945623,
+  "p50": 0.014766719993203878,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 4
+      },
+      "latency_ms": 0.014237452298753369,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.47887899999999994,
+  "max_budget_usd": 1.0
+}

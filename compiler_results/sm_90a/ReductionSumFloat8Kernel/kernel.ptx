@@ -1,0 +1,69 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %x, %out, %addr;
+    .reg .b32 %t, %bx, %by, %index, %lane, %warp, %sm, %sp;
+    .reg .b32 %a<4>, %scale;
+    .reg .s32 %isum, %itotal;
+    .reg .f32 %d<4>, %zero, %sum;
+    .reg .pred %leader, %other, %hasnan, %warpnan;
+
+    // The 128 aligned 16-byte loads cover this batch's entire 2048-element tile.
+    ld.param.u64 %x, [x_ptr];
+    ld.param.u64 %out, [output_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %bx, %ctaid.x;
+    mov.u32 %by, %ctaid.y;
+    mad.lo.u32 %index, %by, 2, %bx;
+    mad.lo.u32 %index, %index, 128, %t;
+    mad.wide.u32 %addr, %index, 16, %x;
+    ld.global.v4.u32 {%a0, %a1, %a2, %a3}, [%addr];
+
+    // Multiplication by E5M2 512 makes every finite E4M3 input an exact integer.
+    mov.b32 %scale, 0x60606060;
+    mov.f32 %zero, 0f00000000;
+    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32 {%d0, %d1, %d2, %d3}, {%a0, %a1, %a2, %a3}, {%scale, %scale}, {%zero, %zero, %zero, %zero};
+
+    // Each lane holds two row sums; their finite scaled sum fits exactly in FP32.
+    add.f32 %sum, %d0, %d2;
+    setp.nan.f32 %hasnan, %sum, %sum;
+    vote.sync.any.pred %warpnan, %hasnan, 0xffffffff;
+    cvt.rzi.s32.f32 %isum, %sum;
+
+    // Hardware integer reduction includes four identical columns and cannot overflow.
+    redux.sync.add.s32 %itotal, %isum, 0xffffffff;
+    cvt.rn.f32.s32 %sum, %itotal;
+    mul.f32 %sum, %sum, 0f3a000000;
+    selp.f32 %sum, 0f7fc00000, %sum, %warpnan;
+
+    // Share the four warp sums through 16 bytes of dynamic shared memory.
+    and.b32 %lane, %t, 31;
+    shr.u32 %warp, %t, 5;
+    mov.u32 %sm, global_smem;
+    mad.lo.u32 %sp, %warp, 4, %sm;
+    setp.eq.u32 %leader, %lane, 0;
+    @%leader st.shared.f32 [%sp], %sum;
+    bar.sync 0;
+    setp.ne.u32 %other, %t, 0;
+    @%other bra DONE;
+
+    // Combine the warp sums and issue one FP32 atomic add for this tile.
+    ld.shared.v4.f32 {%d0, %d1, %d2, %d3}, [%sm];
+    add.f32 %d0, %d0, %d1;
+    add.f32 %d2, %d2, %d3;
+    add.f32 %sum, %d0, %d2;
+    mad.wide.u32 %addr, %by, 4, %out;
+    red.relaxed.gpu.global.add.f32 [%addr], %sum;
+DONE:
+    ret;
+}

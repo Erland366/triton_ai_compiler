@@ -1,0 +1,82 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %o, %z, %v<4>;\n    .reg .b64 %x, %y, %d, %a, %c;\n\n    // Each of 128 threads owns eight contiguous halves in the tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    shl.b32 %o, %b, 11;\n    mad.lo.u32 %o, %t, 16, %o;\n    cvt.u64.u32 %d, %o;\n    add.u64 %a, %x, %d;\n    add.u64 %c, %y, %d;\n\n    // Load eight halves and apply NaN-propagating maximum with zero.\n    mov.b32 %z, 0;\n    ld.global.v4.b32 {%v0, %v1, %v2, %v3}, [%a];\n    max.NaN.f16x2 %v0, %v0, %z;\n    max.NaN.f16x2 %v1, %v1, %z;\n    max.NaN.f16x2 %v2, %v2, %z;\n    max.NaN.f16x2 %v3, %v3, %z;\n\n    // Store the complete 1024-element tile without a mask, as in Triton.\n    st.global.v4.b32 [%c], {%v0, %v1, %v2, %v3};\n    ret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": [
+      "ptxas rejected an integer immediate zero for max.NaN.f16x2; a .b32 zero register compiled successfully."
+    ]
+  },
+  "evaluation": {
+    "kernel_name": "ReLUFloat16Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007040000054985285,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.0072326401155442,
+    "triton_p90": 0.0073203199729323385,
+    "triton_p95": 0.00811712022870779,
+    "triton_p99": 0.008290175795555115,
+    "p20": 0.007040000054985285,
+    "p50": 0.007135999854654074,
+    "p80": 0.0072326401155442,
+    "p90": 0.0073190399818122386,
+    "p95": 0.008104320243000984,
+    "p99": 0.008286719769239425,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-_e5kte2m/kernel.ptx -o /tmp/triton-ptxas-_e5kte2m/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 14 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 2.359 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "ReLUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.007188192603146527,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.2506045
+}

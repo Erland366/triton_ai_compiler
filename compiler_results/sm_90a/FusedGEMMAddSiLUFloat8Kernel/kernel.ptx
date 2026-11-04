@@ -1,0 +1,445 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 a_ptr,
+    .param .u64 b_ptr,
+    .param .u64 d_ptr,
+    .param .u64 c_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+.reqntid 128, 1, 1
+{
+    .reg .pred %p, %more, %acc;
+    .reg .b32 %t, %lane, %warp, %sm, %pm, %pn, %x, %y, %z;
+    .reg .b32 %ao, %bo, %as, %bs, %ab, %bb, %st, %next;
+    .reg .b32 %tr, %ts, %tb, %it;
+    .reg .b32 %r<9>, %ar<16>;
+    .reg .b64 %A, %B, %D, %C, %ga, %gb, %q, %off, %db;
+    .reg .f32 %f<128>;
+    .reg .f32 %v<16>;
+    .reg .b16 %h<12>;
+
+    // Map the fixed 256 by 64 output tile and four cooperating warps.
+    ld.param.u64 %A, [a_ptr];
+    ld.param.u64 %B, [b_ptr];
+    ld.param.u64 %D, [d_ptr];
+    ld.param.u64 %C, [c_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %pm, %ctaid.x;
+    mov.u32 %pn, %ctaid.y;
+    mov.u32 %sm, global_smem;
+    and.b32 %lane, %t, 31;
+    shr.u32 %warp, %t, 5;
+    shl.b32 %x, %pm, 20;
+    cvt.u64.u32 %off, %x;
+    add.u64 %A, %A, %off;
+    shl.b32 %y, %pn, 6;
+    cvt.u64.u32 %q, %y;
+    add.u64 %B, %B, %q;
+    add.u64 %off, %off, %q;
+    add.u64 %D, %D, %off;
+    shl.b64 %off, %off, 1;
+    add.u64 %C, %C, %off;
+
+    // Place A vectors in a 128-byte-swizzled K-major tile.
+    shr.u32 %x, %t, 3;
+    and.b32 %y, %t, 7;
+    shl.b32 %y, %y, 4;
+    shl.b32 %ao, %x, 12;
+    add.u32 %ao, %ao, %y;
+    shl.b32 %as, %x, 7;
+    add.u32 %as, %as, %y;
+    and.b32 %z, %x, 7;
+    shl.b32 %z, %z, 4;
+    xor.b32 %as, %as, %z;
+    add.u32 %as, %as, %sm;
+    cvt.u64.u32 %off, %ao;
+    add.u64 %ga, %A, %off;
+
+    // Swizzle B for conflict-free interleaved K-row matrix loads.
+    shr.u32 %x, %t, 2;
+    and.b32 %y, %t, 3;
+    shl.b32 %y, %y, 4;
+    shl.b32 %bo, %x, 12;
+    add.u32 %bo, %bo, %y;
+    shl.b32 %bs, %t, 4;
+    and.b32 %z, %t, 48;
+    xor.b32 %bs, %bs, %z;
+    add.u32 %bs, %bs, 98304;
+    add.u32 %bs, %bs, %sm;
+    cvt.u64.u32 %off, %bo;
+    add.u64 %gb, %B, %off;
+
+    // Reorder K addresses so byte permutations produce native FP8 fragments.
+    and.b32 %x, %lane, 6;
+    shl.b32 %x, %x, 1;
+    and.b32 %y, %lane, 1;
+    or.b32 %x, %x, %y;
+    and.b32 %y, %lane, 8;
+    shr.u32 %y, %y, 2;
+    or.b32 %x, %x, %y;
+    and.b32 %y, %lane, 16;
+    or.b32 %x, %x, %y;
+    shl.b32 %y, %warp, 4;
+    mad.lo.u32 %tr, %x, 64, %y;
+    and.b32 %z, %lane, 6;
+    shl.b32 %z, %z, 3;
+    xor.b32 %tr, %tr, %z;
+    add.u32 %tr, %tr, 98304;
+    add.u32 %tr, %tr, %sm;
+    mov.u32 %st, 0;
+    mov.u32 %it, 0;
+    setp.ne.u32 %acc, %it, 0;
+
+    // Three A buffers and one B staging buffer exactly fit 106496 bytes.
+    add.u32 %ab, %as, 0;
+    cp.async.cg.shared.global.L2::128B [%ab+0], [%ga+0], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+2048], [%ga+65536], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+4096], [%ga+131072], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+6144], [%ga+196608], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+8192], [%ga+262144], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+10240], [%ga+327680], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+12288], [%ga+393216], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+14336], [%ga+458752], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+16384], [%ga+524288], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+18432], [%ga+589824], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+20480], [%ga+655360], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+22528], [%ga+720896], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+24576], [%ga+786432], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+26624], [%ga+851968], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+28672], [%ga+917504], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+30720], [%ga+983040], 16;
+    cp.async.cg.shared.global.L2::128B [%bs+0], [%gb+0], 16;
+    cp.async.cg.shared.global.L2::128B [%bs+2048], [%gb+131072], 16;
+    cp.async.cg.shared.global.L2::128B [%bs+4096], [%gb+262144], 16;
+    cp.async.cg.shared.global.L2::128B [%bs+6144], [%gb+393216], 16;
+    cp.async.commit_group;
+    add.u64 %ga, %ga, 128;
+    add.u64 %gb, %gb, 524288;
+
+    // Prime the next A tile independently of the current B tile.
+    add.u32 %ab, %as, 32768;
+    cp.async.cg.shared.global.L2::128B [%ab+0], [%ga+0], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+2048], [%ga+65536], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+4096], [%ga+131072], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+6144], [%ga+196608], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+8192], [%ga+262144], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+10240], [%ga+327680], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+12288], [%ga+393216], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+14336], [%ga+458752], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+16384], [%ga+524288], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+18432], [%ga+589824], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+20480], [%ga+655360], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+22528], [%ga+720896], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+24576], [%ga+786432], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+26624], [%ga+851968], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+28672], [%ga+917504], 16;
+    cp.async.cg.shared.global.L2::128B [%ab+30720], [%ga+983040], 16;
+    cp.async.commit_group;
+    add.u64 %ga, %ga, 128;
+    mov.u32 %next, 65536;
+
+MAIN:
+    // Wait for current operands and retire the previous register inputs.
+    cp.async.wait_group 1;
+    wgmma.wait_group.sync.aligned 0;
+    fence.proxy.async.shared::cta;
+    bar.sync 0;
+
+    // Capture B in registers, pairing its even and odd columns as matrix rows.
+    mov.u32 %ts, %tr;
+    add.u32 %tb, %ts, 0;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%r0,%r1,%r2,%r3}, [%tb];
+    prmt.b32 %ar0, %r0, %r1, 0x6420;
+    prmt.b32 %ar1, %r0, %r1, 0x7531;
+    prmt.b32 %ar2, %r2, %r3, 0x6420;
+    prmt.b32 %ar3, %r2, %r3, 0x7531;
+    add.u32 %tb, %ts, 2048;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%r0,%r1,%r2,%r3}, [%tb];
+    prmt.b32 %ar4, %r0, %r1, 0x6420;
+    prmt.b32 %ar5, %r0, %r1, 0x7531;
+    prmt.b32 %ar6, %r2, %r3, 0x6420;
+    prmt.b32 %ar7, %r2, %r3, 0x7531;
+    add.u32 %tb, %ts, 4096;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%r0,%r1,%r2,%r3}, [%tb];
+    prmt.b32 %ar8, %r0, %r1, 0x6420;
+    prmt.b32 %ar9, %r0, %r1, 0x7531;
+    prmt.b32 %ar10, %r2, %r3, 0x6420;
+    prmt.b32 %ar11, %r2, %r3, 0x7531;
+    add.u32 %tb, %ts, 6144;
+    ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%r0,%r1,%r2,%r3}, [%tb];
+    prmt.b32 %ar12, %r0, %r1, 0x6420;
+    prmt.b32 %ar13, %r0, %r1, 0x7531;
+    prmt.b32 %ar14, %r2, %r3, 0x6420;
+    prmt.b32 %ar15, %r2, %r3, 0x7531;
+
+    // Refill B after every warp has captured it; suppress the final prefetch.
+    bar.sync 0;
+    setp.lt.u32 %more, %it, 31;
+    @%more cp.async.cg.shared.global.L2::128B [%bs+0], [%gb+0], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%bs+2048], [%gb+131072], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%bs+4096], [%gb+262144], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%bs+6144], [%gb+393216], 16;
+    cp.async.commit_group;
+    add.u64 %gb, %gb, 524288;
+
+    // Fetch A two tiles ahead, predicating copies beyond K=4096.
+    setp.lt.u32 %more, %it, 30;
+    add.u32 %ab, %as, %next;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+0], [%ga+0], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+2048], [%ga+65536], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+4096], [%ga+131072], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+6144], [%ga+196608], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+8192], [%ga+262144], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+10240], [%ga+327680], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+12288], [%ga+393216], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+14336], [%ga+458752], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+16384], [%ga+524288], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+18432], [%ga+589824], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+20480], [%ga+655360], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+22528], [%ga+720896], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+24576], [%ga+786432], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+26624], [%ga+851968], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+28672], [%ga+917504], 16;
+    @%more cp.async.cg.shared.global.L2::128B [%ab+30720], [%ga+983040], 16;
+    cp.async.commit_group;
+    add.u64 %ga, %ga, 128;
+    add.u32 %next, %next, 32768;
+    setp.eq.u32 %p, %next, 98304;
+    @%p mov.u32 %next, 0;
+    wgmma.fence.sync.aligned;
+
+    // Compute the transposed output with four native FP8 products per K=128 tile.
+    add.u32 %x, %sm, %st;
+    shr.u32 %x, %x, 4;
+    cvt.u64.u32 %db, %x;
+    or.b64 %db, %db, 0x4000004000010000;
+    wgmma.mma_async.sync.aligned.m64n256k32.f32.e4m3.e4m3 {%f0,%f1,%f2,%f3,%f4,%f5,%f6,%f7,%f8,%f9,%f10,%f11,%f12,%f13,%f14,%f15,%f16,%f17,%f18,%f19,%f20,%f21,%f22,%f23,%f24,%f25,%f26,%f27,%f28,%f29,%f30,%f31,%f32,%f33,%f34,%f35,%f36,%f37,%f38,%f39,%f40,%f41,%f42,%f43,%f44,%f45,%f46,%f47,%f48,%f49,%f50,%f51,%f52,%f53,%f54,%f55,%f56,%f57,%f58,%f59,%f60,%f61,%f62,%f63,%f64,%f65,%f66,%f67,%f68,%f69,%f70,%f71,%f72,%f73,%f74,%f75,%f76,%f77,%f78,%f79,%f80,%f81,%f82,%f83,%f84,%f85,%f86,%f87,%f88,%f89,%f90,%f91,%f92,%f93,%f94,%f95,%f96,%f97,%f98,%f99,%f100,%f101,%f102,%f103,%f104,%f105,%f106,%f107,%f108,%f109,%f110,%f111,%f112,%f113,%f114,%f115,%f116,%f117,%f118,%f119,%f120,%f121,%f122,%f123,%f124,%f125,%f126,%f127}, {%ar0,%ar1,%ar2,%ar3}, %db, %acc, 1, 1;
+    add.u64 %db, %db, 2;
+    wgmma.mma_async.sync.aligned.m64n256k32.f32.e4m3.e4m3 {%f0,%f1,%f2,%f3,%f4,%f5,%f6,%f7,%f8,%f9,%f10,%f11,%f12,%f13,%f14,%f15,%f16,%f17,%f18,%f19,%f20,%f21,%f22,%f23,%f24,%f25,%f26,%f27,%f28,%f29,%f30,%f31,%f32,%f33,%f34,%f35,%f36,%f37,%f38,%f39,%f40,%f41,%f42,%f43,%f44,%f45,%f46,%f47,%f48,%f49,%f50,%f51,%f52,%f53,%f54,%f55,%f56,%f57,%f58,%f59,%f60,%f61,%f62,%f63,%f64,%f65,%f66,%f67,%f68,%f69,%f70,%f71,%f72,%f73,%f74,%f75,%f76,%f77,%f78,%f79,%f80,%f81,%f82,%f83,%f84,%f85,%f86,%f87,%f88,%f89,%f90,%f91,%f92,%f93,%f94,%f95,%f96,%f97,%f98,%f99,%f100,%f101,%f102,%f103,%f104,%f105,%f106,%f107,%f108,%f109,%f110,%f111,%f112,%f113,%f114,%f115,%f116,%f117,%f118,%f119,%f120,%f121,%f122,%f123,%f124,%f125,%f126,%f127}, {%ar4,%ar5,%ar6,%ar7}, %db, 1, 1, 1;
+    add.u64 %db, %db, 2;
+    wgmma.mma_async.sync.aligned.m64n256k32.f32.e4m3.e4m3 {%f0,%f1,%f2,%f3,%f4,%f5,%f6,%f7,%f8,%f9,%f10,%f11,%f12,%f13,%f14,%f15,%f16,%f17,%f18,%f19,%f20,%f21,%f22,%f23,%f24,%f25,%f26,%f27,%f28,%f29,%f30,%f31,%f32,%f33,%f34,%f35,%f36,%f37,%f38,%f39,%f40,%f41,%f42,%f43,%f44,%f45,%f46,%f47,%f48,%f49,%f50,%f51,%f52,%f53,%f54,%f55,%f56,%f57,%f58,%f59,%f60,%f61,%f62,%f63,%f64,%f65,%f66,%f67,%f68,%f69,%f70,%f71,%f72,%f73,%f74,%f75,%f76,%f77,%f78,%f79,%f80,%f81,%f82,%f83,%f84,%f85,%f86,%f87,%f88,%f89,%f90,%f91,%f92,%f93,%f94,%f95,%f96,%f97,%f98,%f99,%f100,%f101,%f102,%f103,%f104,%f105,%f106,%f107,%f108,%f109,%f110,%f111,%f112,%f113,%f114,%f115,%f116,%f117,%f118,%f119,%f120,%f121,%f122,%f123,%f124,%f125,%f126,%f127}, {%ar8,%ar9,%ar10,%ar11}, %db, 1, 1, 1;
+    add.u64 %db, %db, 2;
+    wgmma.mma_async.sync.aligned.m64n256k32.f32.e4m3.e4m3 {%f0,%f1,%f2,%f3,%f4,%f5,%f6,%f7,%f8,%f9,%f10,%f11,%f12,%f13,%f14,%f15,%f16,%f17,%f18,%f19,%f20,%f21,%f22,%f23,%f24,%f25,%f26,%f27,%f28,%f29,%f30,%f31,%f32,%f33,%f34,%f35,%f36,%f37,%f38,%f39,%f40,%f41,%f42,%f43,%f44,%f45,%f46,%f47,%f48,%f49,%f50,%f51,%f52,%f53,%f54,%f55,%f56,%f57,%f58,%f59,%f60,%f61,%f62,%f63,%f64,%f65,%f66,%f67,%f68,%f69,%f70,%f71,%f72,%f73,%f74,%f75,%f76,%f77,%f78,%f79,%f80,%f81,%f82,%f83,%f84,%f85,%f86,%f87,%f88,%f89,%f90,%f91,%f92,%f93,%f94,%f95,%f96,%f97,%f98,%f99,%f100,%f101,%f102,%f103,%f104,%f105,%f106,%f107,%f108,%f109,%f110,%f111,%f112,%f113,%f114,%f115,%f116,%f117,%f118,%f119,%f120,%f121,%f122,%f123,%f124,%f125,%f126,%f127}, {%ar12,%ar13,%ar14,%ar15}, %db, 1, 1, 1;
+    wgmma.commit_group.sync.aligned;
+
+    // Advance the A ring and repeat all 32 K tiles.
+    add.u32 %st, %st, 32768;
+    setp.eq.u32 %p, %st, 98304;
+    @%p mov.u32 %st, 0;
+    add.u32 %it, %it, 1;
+    setp.ne.u32 %acc, %it, 0;
+    setp.lt.u32 %p, %it, 32;
+    @%p bra MAIN;
+
+    // Drain both engines before shared memory becomes epilogue workspace.
+    wgmma.wait_group.sync.aligned 0;
+    cp.async.wait_group 0;
+    bar.sync 0;
+
+    // Prefetch the residual while rearranging the accumulator tile.
+    shr.u32 %x, %t, 2;
+    and.b32 %y, %t, 3;
+    shl.b32 %y, %y, 4;
+    shl.b32 %x, %x, 12;
+    add.u32 %x, %x, %y;
+    cvt.u64.u32 %off, %x;
+    add.u64 %q, %D, %off;
+    shl.b32 %x, %t, 4;
+    add.u32 %bb, %sm, 69632;
+    add.u32 %bb, %bb, %x;
+    cp.async.cg.shared.global [%bb+0], [%q+0], 16;
+    cp.async.cg.shared.global [%bb+2048], [%q+131072], 16;
+    cp.async.cg.shared.global [%bb+4096], [%q+262144], 16;
+    cp.async.cg.shared.global [%bb+6144], [%q+393216], 16;
+    cp.async.cg.shared.global [%bb+8192], [%q+524288], 16;
+    cp.async.cg.shared.global [%bb+10240], [%q+655360], 16;
+    cp.async.cg.shared.global [%bb+12288], [%q+786432], 16;
+    cp.async.cg.shared.global [%bb+14336], [%q+917504], 16;
+    cp.async.commit_group;
+
+    // Restore original column order in shared memory with a 68-float row pitch.
+    and.b32 %x, %lane, 3;
+    shl.b32 %x, %x, 1;
+    shr.u32 %y, %lane, 2;
+    shl.b32 %y, %y, 1;
+    mad.lo.u32 %y, %warp, 16, %y;
+    shl.b32 %y, %y, 2;
+    mad.lo.u32 %ts, %x, 272, %y;
+    add.u32 %ts, %ts, %sm;
+    st.shared.v2.f32 [%ts+0], {%f0,%f2};
+    st.shared.v2.f32 [%ts+272], {%f1,%f3};
+    st.shared.v2.f32 [%ts+2176], {%f4,%f6};
+    st.shared.v2.f32 [%ts+2448], {%f5,%f7};
+    st.shared.v2.f32 [%ts+4352], {%f8,%f10};
+    st.shared.v2.f32 [%ts+4624], {%f9,%f11};
+    st.shared.v2.f32 [%ts+6528], {%f12,%f14};
+    st.shared.v2.f32 [%ts+6800], {%f13,%f15};
+    st.shared.v2.f32 [%ts+8704], {%f16,%f18};
+    st.shared.v2.f32 [%ts+8976], {%f17,%f19};
+    st.shared.v2.f32 [%ts+10880], {%f20,%f22};
+    st.shared.v2.f32 [%ts+11152], {%f21,%f23};
+    st.shared.v2.f32 [%ts+13056], {%f24,%f26};
+    st.shared.v2.f32 [%ts+13328], {%f25,%f27};
+    st.shared.v2.f32 [%ts+15232], {%f28,%f30};
+    st.shared.v2.f32 [%ts+15504], {%f29,%f31};
+    st.shared.v2.f32 [%ts+17408], {%f32,%f34};
+    st.shared.v2.f32 [%ts+17680], {%f33,%f35};
+    st.shared.v2.f32 [%ts+19584], {%f36,%f38};
+    st.shared.v2.f32 [%ts+19856], {%f37,%f39};
+    st.shared.v2.f32 [%ts+21760], {%f40,%f42};
+    st.shared.v2.f32 [%ts+22032], {%f41,%f43};
+    st.shared.v2.f32 [%ts+23936], {%f44,%f46};
+    st.shared.v2.f32 [%ts+24208], {%f45,%f47};
+    st.shared.v2.f32 [%ts+26112], {%f48,%f50};
+    st.shared.v2.f32 [%ts+26384], {%f49,%f51};
+    st.shared.v2.f32 [%ts+28288], {%f52,%f54};
+    st.shared.v2.f32 [%ts+28560], {%f53,%f55};
+    st.shared.v2.f32 [%ts+30464], {%f56,%f58};
+    st.shared.v2.f32 [%ts+30736], {%f57,%f59};
+    st.shared.v2.f32 [%ts+32640], {%f60,%f62};
+    st.shared.v2.f32 [%ts+32912], {%f61,%f63};
+    st.shared.v2.f32 [%ts+34816], {%f64,%f66};
+    st.shared.v2.f32 [%ts+35088], {%f65,%f67};
+    st.shared.v2.f32 [%ts+36992], {%f68,%f70};
+    st.shared.v2.f32 [%ts+37264], {%f69,%f71};
+    st.shared.v2.f32 [%ts+39168], {%f72,%f74};
+    st.shared.v2.f32 [%ts+39440], {%f73,%f75};
+    st.shared.v2.f32 [%ts+41344], {%f76,%f78};
+    st.shared.v2.f32 [%ts+41616], {%f77,%f79};
+    st.shared.v2.f32 [%ts+43520], {%f80,%f82};
+    st.shared.v2.f32 [%ts+43792], {%f81,%f83};
+    st.shared.v2.f32 [%ts+45696], {%f84,%f86};
+    st.shared.v2.f32 [%ts+45968], {%f85,%f87};
+    st.shared.v2.f32 [%ts+47872], {%f88,%f90};
+    st.shared.v2.f32 [%ts+48144], {%f89,%f91};
+    st.shared.v2.f32 [%ts+50048], {%f92,%f94};
+    st.shared.v2.f32 [%ts+50320], {%f93,%f95};
+    st.shared.v2.f32 [%ts+52224], {%f96,%f98};
+    st.shared.v2.f32 [%ts+52496], {%f97,%f99};
+    st.shared.v2.f32 [%ts+54400], {%f100,%f102};
+    st.shared.v2.f32 [%ts+54672], {%f101,%f103};
+    st.shared.v2.f32 [%ts+56576], {%f104,%f106};
+    st.shared.v2.f32 [%ts+56848], {%f105,%f107};
+    st.shared.v2.f32 [%ts+58752], {%f108,%f110};
+    st.shared.v2.f32 [%ts+59024], {%f109,%f111};
+    st.shared.v2.f32 [%ts+60928], {%f112,%f114};
+    st.shared.v2.f32 [%ts+61200], {%f113,%f115};
+    st.shared.v2.f32 [%ts+63104], {%f116,%f118};
+    st.shared.v2.f32 [%ts+63376], {%f117,%f119};
+    st.shared.v2.f32 [%ts+65280], {%f120,%f122};
+    st.shared.v2.f32 [%ts+65552], {%f121,%f123};
+    st.shared.v2.f32 [%ts+67456], {%f124,%f126};
+    st.shared.v2.f32 [%ts+67728], {%f125,%f127};
+    cp.async.wait_group 0;
+    bar.sync 0;
+
+    // Map eight-element vectors onto complete rows; all dimensions divide exactly.
+    and.b32 %x, %t, 7;
+    shl.b32 %x, %x, 3;
+    shr.u32 %y, %t, 3;
+    mad.lo.u32 %bb, %y, 64, %x;
+    add.u32 %bb, %bb, %sm;
+    add.u32 %bb, %bb, 69632;
+    shl.b32 %z, %y, 12;
+    add.u32 %z, %z, %x;
+    mul.wide.u32 %off, %z, 2;
+    add.u64 %C, %C, %off;
+    shl.b32 %x, %x, 2;
+    mad.lo.u32 %ts, %y, 272, %x;
+    add.u32 %ts, %ts, %sm;
+    mov.u32 %it, 0;
+
+EPILOGUE:
+    // Convert FP8 residuals exactly through FP16 and add them in FP32.
+    ld.shared.v2.b32 {%r0,%r1}, [%bb];
+    ld.shared.v4.f32 {%v0,%v1,%v2,%v3}, [%ts+0];
+    mov.b32 {%h0,%h1}, %r0;
+    ld.shared.v4.f32 {%v4,%v5,%v6,%v7}, [%ts+16];
+    mov.b32 {%h2,%h3}, %r1;
+    cvt.rn.f16x2.e4m3x2 %r2, %h0;
+    mov.b32 {%h4,%h5}, %r2;
+    cvt.rn.f16x2.e4m3x2 %r3, %h1;
+    mov.b32 {%h6,%h7}, %r3;
+    cvt.rn.f16x2.e4m3x2 %r4, %h2;
+    mov.b32 {%h8,%h9}, %r4;
+    cvt.rn.f16x2.e4m3x2 %r5, %h3;
+    mov.b32 {%h10,%h11}, %r5;
+    cvt.f32.f16 %v8, %h4;
+    cvt.f32.f16 %v9, %h5;
+    cvt.f32.f16 %v10, %h6;
+    cvt.f32.f16 %v11, %h7;
+    cvt.f32.f16 %v12, %h8;
+    cvt.f32.f16 %v13, %h9;
+    cvt.f32.f16 %v14, %h10;
+    cvt.f32.f16 %v15, %h11;
+    add.f32 %v0, %v0, %v8;
+    add.f32 %v1, %v1, %v9;
+    add.f32 %v2, %v2, %v10;
+    add.f32 %v3, %v3, %v11;
+    add.f32 %v4, %v4, %v12;
+    add.f32 %v5, %v5, %v13;
+    add.f32 %v6, %v6, %v14;
+    add.f32 %v7, %v7, %v15;
+
+    // Evaluate eight independent SiLU values using exp2 and reciprocal instructions.
+    mul.f32 %v8, %v0, 0fBFB8AA3B;
+    mul.f32 %v9, %v1, 0fBFB8AA3B;
+    mul.f32 %v10, %v2, 0fBFB8AA3B;
+    mul.f32 %v11, %v3, 0fBFB8AA3B;
+    mul.f32 %v12, %v4, 0fBFB8AA3B;
+    mul.f32 %v13, %v5, 0fBFB8AA3B;
+    mul.f32 %v14, %v6, 0fBFB8AA3B;
+    mul.f32 %v15, %v7, 0fBFB8AA3B;
+    ex2.approx.f32 %v8, %v8;
+    ex2.approx.f32 %v9, %v9;
+    ex2.approx.f32 %v10, %v10;
+    ex2.approx.f32 %v11, %v11;
+    ex2.approx.f32 %v12, %v12;
+    ex2.approx.f32 %v13, %v13;
+    ex2.approx.f32 %v14, %v14;
+    ex2.approx.f32 %v15, %v15;
+    add.f32 %v8, %v8, 0f3F800000;
+    add.f32 %v9, %v9, 0f3F800000;
+    add.f32 %v10, %v10, 0f3F800000;
+    add.f32 %v11, %v11, 0f3F800000;
+    add.f32 %v12, %v12, 0f3F800000;
+    add.f32 %v13, %v13, 0f3F800000;
+    add.f32 %v14, %v14, 0f3F800000;
+    add.f32 %v15, %v15, 0f3F800000;
+    rcp.approx.f32 %v8, %v8;
+    rcp.approx.f32 %v9, %v9;
+    rcp.approx.f32 %v10, %v10;
+    rcp.approx.f32 %v11, %v11;
+    rcp.approx.f32 %v12, %v12;
+    rcp.approx.f32 %v13, %v13;
+    rcp.approx.f32 %v14, %v14;
+    rcp.approx.f32 %v15, %v15;
+    mul.f32 %v0, %v0, %v8;
+    mul.f32 %v1, %v1, %v9;
+    mul.f32 %v2, %v2, %v10;
+    mul.f32 %v3, %v3, %v11;
+    mul.f32 %v4, %v4, %v12;
+    mul.f32 %v5, %v5, %v13;
+    mul.f32 %v6, %v6, %v14;
+    mul.f32 %v7, %v7, %v15;
+
+    // Round once to FP16 and write aligned, coalesced 16-byte vectors.
+    cvt.rn.f16x2.f32 %r0, %v1, %v0;
+    cvt.rn.f16x2.f32 %r1, %v3, %v2;
+    cvt.rn.f16x2.f32 %r2, %v5, %v4;
+    cvt.rn.f16x2.f32 %r3, %v7, %v6;
+    st.global.v4.u32 [%C], {%r0,%r1,%r2,%r3};
+    add.u32 %bb, %bb, 1024;
+    add.u64 %C, %C, 131072;
+    add.u32 %ts, %ts, 4352;
+    add.u32 %it, %it, 1;
+    setp.lt.u32 %p, %it, 16;
+    @%p bra EPILOGUE;
+    ret;
+}

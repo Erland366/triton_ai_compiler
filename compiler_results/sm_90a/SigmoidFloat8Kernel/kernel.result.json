@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_dWL7phAElL3xrtgw3VsL92sK",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.006291200071573257,
+    "triton_p50": 0.006459520002827048,
+    "triton_p80": 0.006629760032519698,
+    "triton_p90": 0.006711680041626096,
+    "triton_p95": 0.006785280117765069,
+    "triton_p99": 0.007040172738395631,
+    "p20": 0.006272000055760145,
+    "p50": 0.006446720007807017,
+    "p80": 0.006616320051252842,
+    "p90": 0.006699520004913211,
+    "p95": 0.006777920117601752,
+    "p99": 0.007062163131404667,
+    "speedup_vs_triton": 1.001985505032719,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.1353825,
+  "autotune_metrics": {
+    "operator": "SigmoidFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 16
+      },
+      "latency_ms": 0.006382631051538351,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.001985505032719,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 x_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n){\n.reg .b32 %r<10>;\n.reg .b64 %a<6>;\n.reg .b16 %h<10>;\n.reg .f32 %f<4>;\n// Each thread processes four adjacent elements of the 2048-element tile.\nld.param.u64 %a0,[x_ptr];\nld.param.u64 %a1,[output_ptr];\nmov.u32 %r0,%ctaid.x;\nmov.u32 %r1,%tid.x;\nshl.b32 %r1,%r1,2;\nmad.lo.u32 %r0,%r0,2048,%r1;\ncvt.u64.u32 %a2,%r0;\nadd.u64 %a3,%a0,%a2;\nshl.b64 %a2,%a2,1;\nadd.u64 %a4,%a1,%a2;\n// Load four FP8 values and expand both packed pairs to half precision.\nld.global.u32 %r2,[%a3];\nmov.b32 {%h0,%h1},%r2;\ncvt.rn.f16x2.e4m3x2 %r3,%h0;\ncvt.rn.f16x2.e4m3x2 %r4,%h1;\nmov.b32 {%h2,%h3},%r3;\nmov.b32 {%h4,%h5},%r4;\ncvt.f32.f16 %f0,%h2;\ncvt.f32.f16 %f1,%h3;\ncvt.f32.f16 %f2,%h4;\ncvt.f32.f16 %f3,%h5;\n// Evaluate sigmoid in float32 with base-two exponentials.\nmul.f32 %f0,%f0,0fBFB8AA3B;\nmul.f32 %f1,%f1,0fBFB8AA3B;\nmul.f32 %f2,%f2,0fBFB8AA3B;\nmul.f32 %f3,%f3,0fBFB8AA3B;\nex2.approx.f32 %f0,%f0;\nex2.approx.f32 %f1,%f1;\nex2.approx.f32 %f2,%f2;\nex2.approx.f32 %f3,%f3;\nadd.f32 %f0,%f0,0f3F800000;\nadd.f32 %f1,%f1,0f3F800000;\nadd.f32 %f2,%f2,0f3F800000;\nadd.f32 %f3,%f3,0f3F800000;\nrcp.approx.f32 %f0,%f0;\nrcp.approx.f32 %f1,%f1;\nrcp.approx.f32 %f2,%f2;\nrcp.approx.f32 %f3,%f3;\n// Round to half precision and store four adjacent outputs.\ncvt.rn.f16.f32 %h6,%f0;\ncvt.rn.f16.f32 %h7,%f1;\ncvt.rn.f16.f32 %h8,%f2;\ncvt.rn.f16.f32 %h9,%f3;\nmov.b32 %r5,{%h6,%h7};\nmov.b32 %r6,{%h8,%h9};\nst.global.v2.u32 [%a4],{%r5,%r6};\nret;\n}",
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

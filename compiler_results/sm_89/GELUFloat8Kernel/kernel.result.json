@@ -1,0 +1,35 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<8>;\n    .reg .b64 %a<6>;\n    .reg .b16 %h<8>;\n    .reg .f32 %x<4>, %t<4>, %v<4>, %e<4>, %z<4>;\n\n    // Each thread owns four adjacent elements of the 512-element tile.\n    ld.param.u64 %a0, [x_ptr];\n    ld.param.u64 %a1, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    shl.b32 %r1, %r1, 2;\n    mad.lo.u32 %r2, %r0, 512, %r1;\n\n    // Load four FP8 values together and compute the output address.\n    mul.wide.u32 %a2, %r2, 1;\n    add.u64 %a3, %a0, %a2;\n    ld.global.u32 %r3, [%a3];\n    mul.wide.u32 %a2, %r2, 2;\n    add.u64 %a4, %a1, %a2;\n\n    // Convert FP8 pairs to FP16, then widen exactly to FP32.\n    mov.b32 {%h0, %h1}, %r3;\n    cvt.rn.f16x2.e4m3x2 %r4, %h0;\n    cvt.rn.f16x2.e4m3x2 %r5, %h1;\n    mov.b32 {%h0, %h1}, %r4;\n    mov.b32 {%h2, %h3}, %r5;\n    cvt.f32.f16 %x0, %h0;\n    cvt.f32.f16 %x1, %h1;\n    cvt.f32.f16 %x2, %h2;\n    cvt.f32.f16 %x3, %h3;\n\n    // Approximate erf(x/sqrt(2)) using a Gaussian and a polynomial in t.\n    abs.f32 %z0, %x0;\n    fma.rn.f32 %t0, %z0, 0.231641888, 1.0;\n    rcp.approx.ftz.f32 %t0, %t0;\n    mul.f32 %e0, %x0, %x0;\n    mul.f32 %e0, %e0, -0.7213475204;\n    ex2.approx.ftz.f32 %e0, %e0;\n    fma.rn.f32 %v0, %t0, 1.061405429, -1.453152027;\n    fma.rn.f32 %v0, %t0, %v0, 1.421413741;\n    fma.rn.f32 %v0, %t0, %v0, -0.284496736;\n    fma.rn.f32 %v0, %t0, %v0, 0.254829592;\n    mul.f32 %v0, %v0, %t0;\n    neg.f32 %v0, %v0;\n    fma.rn.f32 %v0, %v0, %e0, 1.0;\n\n    // Restore the erf sign, evaluate GELU, and round to FP16.\n    copysign.f32 %v0, %x0, %v0;\n    add.f32 %v0, %v0, 1.0;\n    mul.f32 %x0, %x0, 0.5;\n    mul.f32 %x0, %x0, %v0;\n    cvt.rn.f16.f32 %h4, %x0;\n\n    // Evaluate the same erf approximation for the second element.\n    abs.f32 %z1, %x1;\n    fma.rn.f32 %t1, %z1, 0.231641888, 1.0;\n    rcp.approx.ftz.f32 %t1, %t1;\n    mul.f32 %e1, %x1, %x1;\n    mul.f32 %e1, %e1, -0.7213475204;\n    ex2.approx.ftz.f32 %e1, %e1;\n    fma.rn.f32 %v1, %t1, 1.061405429, -1.453152027;\n    fma.rn.f32 %v1, %t1, %v1, 1.421413741;\n    fma.rn.f32 %v1, %t1, %v1, -0.284496736;\n    fma.rn.f32 %v1, %t1, %v1, 0.254829592;\n    mul.f32 %v1, %v1, %t1;\n    neg.f32 %v1, %v1;\n    fma.rn.f32 %v1, %v1, %e1, 1.0;\n\n    // Finish GELU for the second element.\n    copysign.f32 %v1, %x1, %v1;\n    add.f32 %v1, %v1, 1.0;\n    mul.f32 %x1, %x1, 0.5;\n    mul.f32 %x1, %x1, %v1;\n    cvt.rn.f16.f32 %h5, %x1;\n\n    // Evaluate the same erf approximation for the third element.\n    abs.f32 %z2, %x2;\n    fma.rn.f32 %t2, %z2, 0.231641888, 1.0;\n    rcp.approx.ftz.f32 %t2, %t2;\n    mul.f32 %e2, %x2, %x2;\n    mul.f32 %e2, %e2, -0.7213475204;\n    ex2.approx.ftz.f32 %e2, %e2;\n    fma.rn.f32 %v2, %t2, 1.061405429, -1.453152027;\n    fma.rn.f32 %v2, %t2, %v2, 1.421413741;\n    fma.rn.f32 %v2, %t2, %v2, -0.284496736;\n    fma.rn.f32 %v2, %t2, %v2, 0.254829592;\n    mul.f32 %v2, %v2, %t2;\n    neg.f32 %v2, %v2;\n    fma.rn.f32 %v2, %v2, %e2, 1.0;\n\n    // Finish GELU for the third element.\n    copysign.f32 %v2, %x2, %v2;\n    add.f32 %v2, %v2, 1.0;\n    mul.f32 %x2, %x2, 0.5;\n    mul.f32 %x2, %x2, %v2;\n    cvt.rn.f16.f32 %h6, %x2;\n\n    // Evaluate the same erf approximation for the fourth element.\n    abs.f32 %z3, %x3;\n    fma.rn.f32 %t3, %z3, 0.231641888, 1.0;\n    rcp.approx.ftz.f32 %t3, %t3;\n    mul.f32 %e3, %x3, %x3;\n    mul.f32 %e3, %e3, -0.7213475204;\n    ex2.approx.ftz.f32 %e3, %e3;\n    fma.rn.f32 %v3, %t3, 1.061405429, -1.453152027;\n    fma.rn.f32 %v3, %t3, %v3, 1.421413741;\n    fma.rn.f32 %v3, %t3, %v3, -0.284496736;\n    fma.rn.f32 %v3, %t3, %v3, 0.254829592;\n    mul.f32 %v3, %v3, %t3;\n    neg.f32 %v3, %v3;\n    fma.rn.f32 %v3, %v3, %e3, 1.0;\n\n    // Finish GELU for the fourth element.\n    copysign.f32 %v3, %x3, %v3;\n    add.f32 %v3, %v3, 1.0;\n    mul.f32 %x3, %x3, 0.5;\n    mul.f32 %x3, %x3, %v3;\n    cvt.rn.f16.f32 %h7, %x3;\n\n    // Store four results together; the source kernel has no boundary mask.\n    st.global.v4.b16 [%a4], {%h4, %h5, %h6, %h7};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "ptxas rejected malformed label syntax in an initial candidate.",
+    "An initial arithmetic candidate failed correctness with 704316 mismatches; the corrected candidate passed."
+  ],
+  "speedup": 1.0034493631955024,
+  "p50": 0.007143360055051744,
+  "autotune_metrics": {
+    "operator": "GELUFloat8Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 4
+      },
+      "latency_ms": 0.006781237798462348,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 1.3012839999999999,
+  "max_budget_usd": 3.0
+}

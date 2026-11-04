@@ -1,0 +1,79 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 gate_ptr,\n    .param .u64 value_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<12>;\n    .reg .b64 %a<8>;\n    .reg .b16 %h<16>;\n    .reg .f32 %g<4>, %v<4>, %e<4>;\n\n    // Map each thread to four adjacent elements in the 2048-element tile.\n    ld.param.u64 %a0, [gate_ptr];\n    ld.param.u64 %a1, [value_ptr];\n    ld.param.u64 %a2, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    shl.b32 %r0, %r0, 11;\n    shl.b32 %r1, %r1, 2;\n    add.u32 %r0, %r0, %r1;\n    cvt.u64.u32 %a3, %r0;\n    add.u64 %a4, %a0, %a3;\n    add.u64 %a5, %a1, %a3;\n    shl.b64 %a3, %a3, 1;\n    add.u64 %a6, %a2, %a3;\n\n    // Load four packed FP8 values from each input and convert pairs exactly.\n    ld.global.u32 %r2, [%a4];\n    ld.global.u32 %r3, [%a5];\n    mov.b32 {%h0, %h1}, %r2;\n    mov.b32 {%h2, %h3}, %r3;\n    cvt.rn.f16x2.e4m3x2 %r4, %h0;\n    cvt.rn.f16x2.e4m3x2 %r5, %h1;\n    cvt.rn.f16x2.e4m3x2 %r6, %h2;\n    cvt.rn.f16x2.e4m3x2 %r7, %h3;\n    mov.b32 {%h4, %h5}, %r4;\n    mov.b32 {%h6, %h7}, %r5;\n    mov.b32 {%h8, %h9}, %r6;\n    mov.b32 {%h10, %h11}, %r7;\n\n    // Widen inputs to float32 before evaluating the activation.\n    cvt.f32.f16 %g0, %h4;\n    cvt.f32.f16 %g1, %h5;\n    cvt.f32.f16 %g2, %h6;\n    cvt.f32.f16 %g3, %h7;\n    cvt.f32.f16 %v0, %h8;\n    cvt.f32.f16 %v1, %h9;\n    cvt.f32.f16 %v2, %h10;\n    cvt.f32.f16 %v3, %h11;\n\n    // Compute exp(-gate) using multiplication by -log2(e).\n    mul.f32 %e0, %g0, 0fBFB8AA3B;\n    mul.f32 %e1, %g1, 0fBFB8AA3B;\n    mul.f32 %e2, %g2, 0fBFB8AA3B;\n    mul.f32 %e3, %g3, 0fBFB8AA3B;\n    ex2.approx.f32 %e0, %e0;\n    ex2.approx.f32 %e1, %e1;\n    ex2.approx.f32 %e2, %e2;\n    ex2.approx.f32 %e3, %e3;\n\n    // Form the reciprocal sigmoid denominators.\n    add.f32 %e0, %e0, 0f3F800000;\n    add.f32 %e1, %e1, 0f3F800000;\n    add.f32 %e2, %e2, 0f3F800000;\n    add.f32 %e3, %e3, 0f3F800000;\n    rcp.approx.f32 %e0, %e0;\n    rcp.approx.f32 %e1, %e1;\n    rcp.approx.f32 %e2, %e2;\n    rcp.approx.f32 %e3, %e3;\n\n    // Multiply gate by its sigmoid, then multiply by value.\n    mul.f32 %g0, %g0, %e0;\n    mul.f32 %g1, %g1, %e1;\n    mul.f32 %g2, %g2, %e2;\n    mul.f32 %g3, %g3, %e3;\n    mul.f32 %g0, %g0, %v0;\n    mul.f32 %g1, %g1, %v1;\n    mul.f32 %g2, %g2, %v2;\n    mul.f32 %g3, %g3, %v3;\n\n    // Round to float16 and store four results; every tile is complete.\n    cvt.rn.f16.f32 %h12, %g0;\n    cvt.rn.f16.f32 %h13, %g1;\n    cvt.rn.f16.f32 %h14, %g2;\n    cvt.rn.f16.f32 %h15, %g3;\n    mov.b32 %r8, {%h12, %h13};\n    mov.b32 %r9, {%h14, %h15};\n    st.global.v2.b32 [%a6], {%r8, %r9};\n    ret;\n}",
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": []
+  },
+  "evaluation": {
+    "kernel_name": "SwiGLUFloat8Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007040000054985285,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.00723200011998415,
+    "triton_p90": 0.007296000141650438,
+    "triton_p95": 0.007367680110037327,
+    "triton_p99": 0.00824511980637908,
+    "p20": 0.007040000054985285,
+    "p50": 0.007135999854654074,
+    "p80": 0.00723200011998415,
+    "p90": 0.007296000141650438,
+    "p95": 0.0073696001153439284,
+    "p99": 0.008244191844947636,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-4_4dk7gz/kernel.ptx -o /tmp/triton-ptxas-4_4dk7gz/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 20 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 4.173 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 16
+      },
+      "latency_ms": 0.007137668642022462,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.338165
+}

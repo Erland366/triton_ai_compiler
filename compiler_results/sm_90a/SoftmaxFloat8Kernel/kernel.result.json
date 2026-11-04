@@ -1,0 +1,57 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_L4uttgda5YzM6SuihRKrK1Sr",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.008204159867018461,
+    "triton_p50": 0.008391680084168912,
+    "triton_p80": 0.008540800157934427,
+    "triton_p90": 0.008616319932043552,
+    "triton_p95": 0.008703135959804058,
+    "triton_p99": 0.009086950246244669,
+    "p20": 0.006982271989807487,
+    "p50": 0.007189759928733111,
+    "p80": 0.007336960099637508,
+    "p90": 0.007399680083617568,
+    "p95": 0.0074667201493866745,
+    "p99": 0.007679718300700186,
+    "speedup_vs_triton": 1.1671711110453709,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 3.2356074999999995,
+  "autotune_metrics": {
+    "operator": "SoftmaxFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 256,
+      "num_stages": 2
+    },
+    "selected_config": {
+      "num_warps": 4,
+      "num_stages": 2
+    },
+    "tuning_result": {
+      "parameters": {
+        "num_warps": 4,
+        "num_stages": 2
+      },
+      "latency_ms": 0.008272976518341912,
+      "evaluated_configurations": 6,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.1671711110453709,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 output_ptr,\n    .param .u64 input_ptr,\n    .param .u32 input_row_stride,\n    .param .u32 output_row_stride,\n    .param .u32 n_rows,\n    .param .u32 n_cols,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %pRow, %pLoop;\n    .reg .b32 %r<12>, %raw<4>, %v<8>, %out<8>;\n    .reg .b16 %b<8>, %h<16>, %ha, %hb;\n    .reg .b64 %rd<10>;\n    .reg .f32 %f<16>, %s<8>, %m, %t, %inv;\n\n    // Pack 8 independent rows into a CTA, using 16 lanes per row.\n    ld.param.u32 %r0, [n_rows];\n    mov.u32 %r1, %ctaid.x;\n    shl.b32 %r1, %r1, 3;\n    setp.ge.u32 %pLoop, %r1, %r0;\n    @%pLoop bra.uni DONE;\n    mov.u32 %r2, %tid.x;\n    shr.u32 %r3, %r2, 4;\n    add.u32 %r3, %r1, %r3;\n    and.b32 %r2, %r2, 15;\n    shl.b32 %r4, %r2, 3;\n    shl.b32 %r5, %r2, 4;\n    mov.u32 %r6, %nctaid.x;\n    shl.b32 %r6, %r6, 3;\n    ld.param.u32 %r7, [input_row_stride];\n    ld.param.u32 %r8, [output_row_stride];\n    ld.param.u64 %rd0, [input_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n\n    // Each lane reads eight-column vectors, spaced across the complete 256-column row.\n    mad.wide.u32 %rd2, %r3, %r7, %rd0;\n    cvt.u64.u32 %rd4, %r4;\n    add.u64 %rd2, %rd2, %rd4;\n    mul.wide.u32 %rd3, %r3, %r8;\n    shl.b64 %rd3, %rd3, 1;\n    add.u64 %rd3, %rd3, %rd1;\n    cvt.u64.u32 %rd5, %r5;\n    add.u64 %rd3, %rd3, %rd5;\n    mul.wide.u32 %rd6, %r6, %r7;\n    mul.wide.u32 %rd7, %r6, %r8;\n    shl.b64 %rd7, %rd7, 1;\n\n    // Initialize inactive-row registers; only valid rows access global memory.\n    mov.b32 %raw0, 0;\n    mov.b32 %raw1, 0;\n    mov.b32 %raw2, 0;\n    mov.b32 %raw3, 0;\n\nROW_LOOP:\n    // Guard rows only: the Triton kernel always accesses all 256 columns.\n    setp.lt.u32 %pRow, %r3, %r0;\n    @%pRow ld.global.v2.b32 {%raw0, %raw1}, [%rd2+0];\n    @%pRow ld.global.v2.b32 {%raw2, %raw3}, [%rd2+128];\n\n    // Decode packed E4M3 values exactly through native FP16 conversion.\n    mov.b32 {%b0, %b1}, %raw0;\n    mov.b32 {%b2, %b3}, %raw1;\n    mov.b32 {%b4, %b5}, %raw2;\n    mov.b32 {%b6, %b7}, %raw3;\n    cvt.rn.f16x2.e4m3x2 %v0, %b0;\n    mov.b32 {%h0, %h1}, %v0;\n    cvt.rn.f16x2.e4m3x2 %v1, %b1;\n    mov.b32 {%h2, %h3}, %v1;\n    cvt.rn.f16x2.e4m3x2 %v2, %b2;\n    mov.b32 {%h4, %h5}, %v2;\n    cvt.rn.f16x2.e4m3x2 %v3, %b3;\n    mov.b32 {%h6, %h7}, %v3;\n    cvt.rn.f16x2.e4m3x2 %v4, %b4;\n    mov.b32 {%h8, %h9}, %v4;\n    cvt.rn.f16x2.e4m3x2 %v5, %b5;\n    mov.b32 {%h10, %h11}, %v5;\n    cvt.rn.f16x2.e4m3x2 %v6, %b6;\n    mov.b32 {%h12, %h13}, %v6;\n    cvt.rn.f16x2.e4m3x2 %v7, %b7;\n    mov.b32 {%h14, %h15}, %v7;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n    cvt.f32.f16 %f4, %h4;\n    cvt.f32.f16 %f5, %h5;\n    cvt.f32.f16 %f6, %h6;\n    cvt.f32.f16 %f7, %h7;\n    cvt.f32.f16 %f8, %h8;\n    cvt.f32.f16 %f9, %h9;\n    cvt.f32.f16 %f10, %h10;\n    cvt.f32.f16 %f11, %h11;\n    cvt.f32.f16 %f12, %h12;\n    cvt.f32.f16 %f13, %h13;\n    cvt.f32.f16 %f14, %h14;\n    cvt.f32.f16 %f15, %h15;\n\n    // Reduce packed half maxima locally, then reduce within each row subgroup.\n    max.NaN.f16x2 %v0, %v0, %v1;\n    max.NaN.f16x2 %v2, %v2, %v3;\n    max.NaN.f16x2 %v4, %v4, %v5;\n    max.NaN.f16x2 %v6, %v6, %v7;\n    max.NaN.f16x2 %v0, %v0, %v2;\n    max.NaN.f16x2 %v4, %v4, %v6;\n    max.NaN.f16x2 %v0, %v0, %v4;\n    mov.b32 {%ha, %hb}, %v0;\n    max.NaN.f16 %ha, %ha, %hb;\n    cvt.f32.f16 %m, %ha;\n    shfl.sync.bfly.b32 %t, %m, 8, 0x100f, 0xffffffff;\n    max.NaN.f32 %m, %m, %t;\n    shfl.sync.bfly.b32 %t, %m, 4, 0x100f, 0xffffffff;\n    max.NaN.f32 %m, %m, %t;\n    shfl.sync.bfly.b32 %t, %m, 2, 0x100f, 0xffffffff;\n    max.NaN.f32 %m, %m, %t;\n    shfl.sync.bfly.b32 %t, %m, 1, 0x100f, 0xffffffff;\n    max.NaN.f32 %m, %m, %t;\n\n    // Apply the common maximum bias and calculate stable FP32 exponentials.\n    mul.f32 %m, %m, 0fbfb8aa3b;\n    fma.rn.f32 %f0, %f0, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f0, %f0;\n    fma.rn.f32 %f1, %f1, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f1, %f1;\n    fma.rn.f32 %f2, %f2, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f2, %f2;\n    fma.rn.f32 %f3, %f3, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f3, %f3;\n    fma.rn.f32 %f4, %f4, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f4, %f4;\n    fma.rn.f32 %f5, %f5, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f5, %f5;\n    fma.rn.f32 %f6, %f6, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f6, %f6;\n    fma.rn.f32 %f7, %f7, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f7, %f7;\n    fma.rn.f32 %f8, %f8, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f8, %f8;\n    fma.rn.f32 %f9, %f9, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f9, %f9;\n    fma.rn.f32 %f10, %f10, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f10, %f10;\n    fma.rn.f32 %f11, %f11, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f11, %f11;\n    fma.rn.f32 %f12, %f12, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f12, %f12;\n    fma.rn.f32 %f13, %f13, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f13, %f13;\n    fma.rn.f32 %f14, %f14, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f14, %f14;\n    fma.rn.f32 %f15, %f15, 0f3fb8aa3b, %m;\n    ex2.approx.f32 %f15, %f15;\n\n    // Sum all numerators within each independent row subgroup.\n    add.f32 %s0, %f0, %f1;\n    add.f32 %s1, %f2, %f3;\n    add.f32 %s2, %f4, %f5;\n    add.f32 %s3, %f6, %f7;\n    add.f32 %s4, %f8, %f9;\n    add.f32 %s5, %f10, %f11;\n    add.f32 %s6, %f12, %f13;\n    add.f32 %s7, %f14, %f15;\n    add.f32 %s0, %s0, %s1;\n    add.f32 %s2, %s2, %s3;\n    add.f32 %s4, %s4, %s5;\n    add.f32 %s6, %s6, %s7;\n    add.f32 %s0, %s0, %s2;\n    add.f32 %s4, %s4, %s6;\n    add.f32 %s0, %s0, %s4;\n    shfl.sync.bfly.b32 %t, %s0, 8, 0x100f, 0xffffffff;\n    add.f32 %s0, %s0, %t;\n    shfl.sync.bfly.b32 %t, %s0, 4, 0x100f, 0xffffffff;\n    add.f32 %s0, %s0, %t;\n    shfl.sync.bfly.b32 %t, %s0, 2, 0x100f, 0xffffffff;\n    add.f32 %s0, %s0, %t;\n    shfl.sync.bfly.b32 %t, %s0, 1, 0x100f, 0xffffffff;\n    add.f32 %s0, %s0, %t;\n\n    // Normalize in FP32 and pack adjacent FP16 outputs.\n    rcp.approx.f32 %inv, %s0;\n    mul.f32 %f0, %f0, %inv;\n    mul.f32 %f1, %f1, %inv;\n    mul.f32 %f2, %f2, %inv;\n    mul.f32 %f3, %f3, %inv;\n    mul.f32 %f4, %f4, %inv;\n    mul.f32 %f5, %f5, %inv;\n    mul.f32 %f6, %f6, %inv;\n    mul.f32 %f7, %f7, %inv;\n    mul.f32 %f8, %f8, %inv;\n    mul.f32 %f9, %f9, %inv;\n    mul.f32 %f10, %f10, %inv;\n    mul.f32 %f11, %f11, %inv;\n    mul.f32 %f12, %f12, %inv;\n    mul.f32 %f13, %f13, %inv;\n    mul.f32 %f14, %f14, %inv;\n    mul.f32 %f15, %f15, %inv;\n    cvt.rn.f16x2.f32 %out0, %f1, %f0;\n    cvt.rn.f16x2.f32 %out1, %f3, %f2;\n    cvt.rn.f16x2.f32 %out2, %f5, %f4;\n    cvt.rn.f16x2.f32 %out3, %f7, %f6;\n    cvt.rn.f16x2.f32 %out4, %f9, %f8;\n    cvt.rn.f16x2.f32 %out5, %f11, %f10;\n    cvt.rn.f16x2.f32 %out6, %f13, %f12;\n    cvt.rn.f16x2.f32 %out7, %f15, %f14;\n\n    // Store coalesced output vectors, skipping only out-of-range rows.\n    @%pRow st.global.v4.b32 [%rd3+0], {%out0, %out1, %out2, %out3};\n    @%pRow st.global.v4.b32 [%rd3+256], {%out4, %out5, %out6, %out7};\n\n    // Advance whole CTA row batches together so all warp shuffles remain converged.\n    add.u32 %r1, %r1, %r6;\n    add.u32 %r3, %r3, %r6;\n    add.u64 %rd2, %rd2, %rd6;\n    add.u64 %rd3, %rd3, %rd7;\n    setp.lt.u32 %pLoop, %r1, %r0;\n    @%pLoop bra.uni ROW_LOOP;\nDONE:\n    ret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

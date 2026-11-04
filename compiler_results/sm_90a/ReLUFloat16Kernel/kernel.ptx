@@ -1,0 +1,41 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+.extern .shared .align 16 .b8 global_smem[];
+.visible .entry kernel(
+ .param .u64 x_ptr,
+ .param .u64 output_ptr,
+ .param .u64 dummy_ptr1,
+ .param .u64 dummy_ptr2
+)
+{
+ .reg .b32 %t, %b, %off, %zero, %v<8>;
+ .reg .b64 %x, %y, %delta, %a, %o;
+ // Map 128 threads onto two 1024-element vector segments.
+ ld.param.u64 %x, [x_ptr];
+ ld.param.u64 %y, [output_ptr];
+ mov.u32 %t, %tid.x;
+ mov.u32 %b, %ctaid.x;
+ shl.b32 %off, %b, 12;
+ mad.lo.u32 %off, %t, 16, %off;
+ cvt.u64.u32 %delta, %off;
+ add.u64 %a, %x, %delta;
+ add.u64 %o, %y, %delta;
+ // Load sixteen halves per thread with aligned vector loads.
+ ld.global.v4.b32 {%v0,%v1,%v2,%v3}, [%a];
+ ld.global.v4.b32 {%v4,%v5,%v6,%v7}, [%a+2048];
+ // Preserve NaNs and subnormals while clamping negative values to zero.
+ mov.b32 %zero, 0;
+ max.NaN.f16x2 %v0, %v0, %zero;
+ max.NaN.f16x2 %v1, %v1, %zero;
+ max.NaN.f16x2 %v2, %v2, %zero;
+ max.NaN.f16x2 %v3, %v3, %zero;
+ max.NaN.f16x2 %v4, %v4, %zero;
+ max.NaN.f16x2 %v5, %v5, %zero;
+ max.NaN.f16x2 %v6, %v6, %zero;
+ max.NaN.f16x2 %v7, %v7, %zero;
+ // The original tile has no mask; write all 2048 results.
+ st.global.v4.b32 [%o], {%v0,%v1,%v2,%v3};
+ st.global.v4.b32 [%o+2048], {%v4,%v5,%v6,%v7};
+ ret;
+}

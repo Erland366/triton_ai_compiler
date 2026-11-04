@@ -1,0 +1,35 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %x, %y, %off, %a, %b;
+    .reg .b32 %t, %pid, %idx, %v, %r, %zero;
+
+    // Each thread owns two adjacent halves in its 256-element tile.
+    ld.param.u64 %x, [x_ptr];
+    ld.param.u64 %y, [output_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %pid, %ctaid.x;
+    mad.lo.u32 %idx, %pid, 128, %t;
+    mul.wide.u32 %off, %idx, 4;
+    add.u64 %a, %x, %off;
+    add.u64 %b, %y, %off;
+
+    // Load and clamp both halves, preserving NaNs and subnormals.
+    mov.b32 %zero, 0;
+    ld.global.b32 %v, [%a];
+    max.NaN.f16x2 %r, %v, %zero;
+
+    // The original kernel has no boundary mask; store the complete pair.
+    st.global.b32 [%b], %r;
+    ret;
+}

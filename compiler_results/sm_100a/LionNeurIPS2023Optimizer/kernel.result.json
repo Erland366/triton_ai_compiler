@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_q92lejT9Of0Re583r5cCqI8r",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.018367360159754754,
+    "triton_p50": 0.018499839305877685,
+    "triton_p80": 0.019498879462480544,
+    "triton_p90": 0.019574400037527084,
+    "triton_p95": 0.019617920368909837,
+    "triton_p99": 0.020458643114566803,
+    "p20": 0.018358400091528893,
+    "p50": 0.01849599927663803,
+    "p80": 0.01949503943324089,
+    "p90": 0.019569343999028207,
+    "p95": 0.01962496042251587,
+    "p99": 0.022796313712373374,
+    "speedup_vs_triton": 1.0002076140457306,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 1.4415745,
+  "autotune_metrics": {
+    "operator": "LionNeurIPS2023Optimizer",
+    "constexpr_values": {
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.018910031713667397,
+      "evaluated_configurations": 24,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0002076140457306,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 p_ptr,\n    .param .u64 grad_ptr,\n    .param .u64 exp_avg_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %bid, %idx;\n    .reg .b64 %pp, %gp, %mp;\n    .reg .b64 %p<2>, %g<2>, %m<2>, %d<2>, %u<2>, %s<2>;\n    .reg .b64 %b1, %b2, %decay;\n    .reg .f32 %v<4>, %step<4>;\n    .reg .pred %pos<4>, %nz<4>;\n\n    // Each of 256 threads covers four elements of the unmasked 1024-element tile.\n    ld.param.u64 %pp, [p_ptr];\n    ld.param.u64 %gp, [grad_ptr];\n    ld.param.u64 %mp, [exp_avg_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %bid, %ctaid.x;\n    mad.lo.u32 %idx, %bid, 256, %t;\n    mad.wide.u32 %pp, %idx, 16, %pp;\n    mad.wide.u32 %gp, %idx, 16, %gp;\n    mad.wide.u32 %mp, %idx, 16, %mp;\n\n    // Load aligned float4 vectors, prefetching neighboring L2 sectors.\n    ld.global.L2::256B.v2.b64 {%p0, %p1}, [%pp];\n    ld.global.L2::256B.v2.b64 {%g0, %g1}, [%gp];\n    ld.global.L2::256B.v2.b64 {%m0, %m1}, [%mp];\n    mov.b64 %b1, 0x3f6666663f666666;\n    mov.b64 %b2, 0x3f7d70a43f7d70a4;\n    mov.b64 %decay, 0x3f7fffef3f7fffef;\n\n    // Reuse the momentum-gradient difference in two packed FP32 interpolations.\n    sub.rn.f32x2 %d0, %m0, %g0;\n    sub.rn.f32x2 %d1, %m1, %g1;\n    fma.rn.f32x2 %u0, %d0, %b1, %g0;\n    fma.rn.f32x2 %u1, %d1, %b1, %g1;\n    fma.rn.f32x2 %m0, %d0, %b2, %g0;\n    fma.rn.f32x2 %m1, %d1, %b2, %g1;\n\n    // Match the positive, nonzero, and NaN cases of the Triton sign update.\n    mov.b64 {%v0, %v1}, %u0;\n    mov.b64 {%v2, %v3}, %u1;\n    setp.gt.f32 %pos0, %v0, 0f00000000;\n    setp.gt.f32 %pos1, %v1, 0f00000000;\n    setp.gt.f32 %pos2, %v2, 0f00000000;\n    setp.gt.f32 %pos3, %v3, 0f00000000;\n    setp.neu.f32 %nz0, %v0, 0f00000000;\n    setp.neu.f32 %nz1, %v1, 0f00000000;\n    setp.neu.f32 %nz2, %v2, 0f00000000;\n    setp.neu.f32 %nz3, %v3, 0f00000000;\n    selp.f32 %step0, 0fb8d1b717, 0f38d1b717, %pos0;\n    selp.f32 %step1, 0fb8d1b717, 0f38d1b717, %pos1;\n    selp.f32 %step2, 0fb8d1b717, 0f38d1b717, %pos2;\n    selp.f32 %step3, 0fb8d1b717, 0f38d1b717, %pos3;\n    selp.f32 %step0, %step0, 0f00000000, %nz0;\n    selp.f32 %step1, %step1, 0f00000000, %nz1;\n    selp.f32 %step2, %step2, 0f00000000, %nz2;\n    selp.f32 %step3, %step3, 0f00000000, %nz3;\n\n    // Fuse the parameter decay and signed step in packed FP32 arithmetic.\n    mov.b64 %s0, {%step0, %step1};\n    mov.b64 %s1, {%step2, %step3};\n    fma.rn.f32x2 %p0, %p0, %decay, %s0;\n    fma.rn.f32x2 %p1, %p1, %decay, %s1;\n\n    // Store parameters and momentum using coalesced 16-byte writes.\n    st.global.v2.b64 [%pp], {%p0, %p1};\n    st.global.v2.b64 [%mp], {%m0, %m1};\n    ret;\n}\n",
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i, %v<4>, %o<8>;\n    .reg .b16 %h<8>;\n    .reg .b64 %x, %y, %a, %d;\n\n    // Assign sixteen adjacent elements per thread in the 2048-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    shl.b32 %i, %t, 4;\n    mad.lo.u32 %i, %b, 2048, %i;\n\n    // Load sixteen FP8 elements with one aligned vector load.\n    cvta.to.global.u64 %x, %x;\n    cvta.to.global.u64 %y, %y;\n    cvt.u64.u32 %a, %i;\n    add.u64 %a, %x, %a;\n    ld.global.v4.b32 {%v0,%v1,%v2,%v3}, [%a];\n\n    // Split the input into packed FP8 pairs.\n    mov.b32 {%h0,%h1}, %v0;\n    mov.b32 {%h2,%h3}, %v1;\n    mov.b32 {%h4,%h5}, %v2;\n    mov.b32 {%h6,%h7}, %v3;\n\n    // Convert to FP16 with fused ReLU, preserving NaNs.\n    cvt.rn.relu.f16x2.e4m3x2 %o0, %h0;\n    cvt.rn.relu.f16x2.e4m3x2 %o1, %h1;\n    cvt.rn.relu.f16x2.e4m3x2 %o2, %h2;\n    cvt.rn.relu.f16x2.e4m3x2 %o3, %h3;\n    cvt.rn.relu.f16x2.e4m3x2 %o4, %h4;\n    cvt.rn.relu.f16x2.e4m3x2 %o5, %h5;\n    cvt.rn.relu.f16x2.e4m3x2 %o6, %h6;\n    cvt.rn.relu.f16x2.e4m3x2 %o7, %h7;\n\n    // Store all sixteen results; the original kernel has no boundary mask.\n    mul.wide.u32 %d, %i, 2;\n    add.u64 %d, %y, %d;\n    st.global.v4.b32 [%d], {%o0,%o1,%o2,%o3};\n    st.global.v4.b32 [%d+16], {%o4,%o5,%o6,%o7};\n    ret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": []
+  },
+  "evaluation": {
+    "kernel_name": "ReLUFloat8Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007027839962393046,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.007230080105364323,
+    "triton_p90": 0.0072639998979866505,
+    "triton_p95": 0.007304160085041076,
+    "triton_p99": 0.007392639992758632,
+    "p20": 0.007023999933153391,
+    "p50": 0.007135999854654074,
+    "p80": 0.007230720110237598,
+    "p90": 0.007264639902859926,
+    "p95": 0.007307904059067369,
+    "p99": 0.007434540877304971,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-e2iltt3x/kernel.ptx -o /tmp/triton-ptxas-e2iltt3x/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 18 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 2.714 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "ReLUFloat8Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 4
+      },
+      "latency_ms": 0.007083941816539088,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.3889325
+}

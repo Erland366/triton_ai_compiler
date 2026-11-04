@@ -1,0 +1,28 @@
+{
+  "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i, %a, %c, %o0, %o1;\n    .reg .b64 %x, %y, %off, %xp, %yp;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<4>;\n\n    // Cover 1024 elements per CTA, four consecutive halves per thread.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    shl.b32 %i, %b, 10;\n    mad.lo.u32 %i, %t, 4, %i;\n    mul.wide.u32 %off, %i, 2;\n    add.u64 %xp, %x, %off;\n    add.u64 %yp, %y, %off;\n\n    // Load four aligned halves; the full tile is valid without masking.\n    ld.global.v2.b32 {%a, %c}, [%xp];\n    mov.b32 {%h0, %h1}, %a;\n    mov.b32 {%h2, %h3}, %c;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n\n    // Scale by negative log2(e) and evaluate exp(-x) in float32.\n    mul.f32 %f0, %f0, 0fBFB8AA3B;\n    mul.f32 %f1, %f1, 0fBFB8AA3B;\n    mul.f32 %f2, %f2, 0fBFB8AA3B;\n    mul.f32 %f3, %f3, 0fBFB8AA3B;\n    ex2.approx.f32 %f0, %f0;\n    ex2.approx.f32 %f1, %f1;\n    ex2.approx.f32 %f2, %f2;\n    ex2.approx.f32 %f3, %f3;\n\n    // Compute sigmoid as the reciprocal of one plus the exponential.\n    add.f32 %f0, %f0, 0f3F800000;\n    add.f32 %f1, %f1, 0f3F800000;\n    add.f32 %f2, %f2, 0f3F800000;\n    add.f32 %f3, %f3, 0f3F800000;\n    rcp.approx.f32 %f0, %f0;\n    rcp.approx.f32 %f1, %f1;\n    rcp.approx.f32 %f2, %f2;\n    rcp.approx.f32 %f3, %f3;\n\n    // Round and pack pairs; the first source occupies the upper half.\n    cvt.rn.f16x2.f32 %o0, %f1, %f0;\n    cvt.rn.f16x2.f32 %o1, %f3, %f2;\n    st.global.v2.b32 [%yp], {%o0, %o1};\n    ret;\n}",
+  "num_threads_x": 256,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 1.003471619378746,
+  "p50": 0.007374080093577504,
+  "autotune_metrics": {
+    "operator": "SigmoidFloat16Kernel",
+    "constexpr_values": {},
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.007096864662677063,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA H100 80GB HBM3",
+  "run_cost_usd_so_far": 0.341022
+}

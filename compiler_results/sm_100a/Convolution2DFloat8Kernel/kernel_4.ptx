@@ -1,0 +1,479 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<12>;
+    .reg .b32 %r<100>;
+    .reg .b64 %rd<32>;
+    .reg .f32 %f<64>;
+    .reg .b32 %h<32>;
+
+    // Identify the 128-channel by 64-pixel convolution tile.
+    ld.param.u64 %rd0, [x_ptr];
+    ld.param.u64 %rd1, [weight_ptr];
+    ld.param.u64 %rd2, [output_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    shl.b32 %r3, %r1, 6;
+    shl.b32 %r4, %r2, 7;
+    mov.u32 %r5, global_smem;
+    add.u32 %r6, %r5, 32768;
+    add.u32 %r7, %r5, 32760;
+    add.u32 %r69, %r5, 32776;
+    setp.eq.u32 %p0, %r0, 0;
+    setp.lt.u32 %p1, %r0, 32;
+
+    // Allocate tensor memory. Both barriers fit within the 32784-byte budget.
+    @%p0 mbarrier.init.shared::cta.b64 [%r6], 1;
+    @%p0 mbarrier.init.shared::cta.b64 [%r69], 1;
+    @%p1 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r7], 64;
+    @%p1 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+    bar.sync 0;
+    ld.shared.u32 %r8, [%r7];
+
+    // Four-pixel groups never cross batches; compute their input origins.
+    and.b32 %r9, %r0, 15;
+    shl.b32 %r9, %r9, 2;
+    add.u32 %r10, %r3, %r9;
+    div.u32 %r11, %r10, 2916;
+    rem.u32 %r12, %r10, 2916;
+    div.u32 %r13, %r12, 54;
+    rem.u32 %r14, %r12, 54;
+    mad.lo.u32 %r15, %r13, 56, %r14;
+    mad.lo.u32 %r15, %r11, 200704, %r15;
+
+    // Column 52 needs a two-byte row-gap correction in the byte selector.
+    setp.eq.u32 %p6, %r14, 52;
+    selp.u32 %r78, 0x5410, 0x3210, %p6;
+    shr.u32 %r52, %r0, 4;
+    mad.lo.u32 %r53, %r52, 64, %r9;
+    shr.u32 %r54, %r53, 3;
+    and.b32 %r54, %r54, 48;
+    xor.b32 %r53, %r53, %r54;
+    add.u32 %r53, %r53, 8192;
+    add.u32 %r53, %r53, %r5;
+
+    // Cache nine aligned origins and selectors for the cyclic im2col gather.
+    add.u32 %r27, %r52, 0;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r60, %r15, %r32;
+    and.b32 %r56, %r60, 3;
+    mad.lo.u32 %r80, %r56, 0x1111, %r78;
+    and.b32 %r60, %r60, 0xfffffffc;
+
+    add.u32 %r27, %r52, 8;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r61, %r15, %r32;
+    and.b32 %r56, %r61, 3;
+    mad.lo.u32 %r81, %r56, 0x1111, %r78;
+    and.b32 %r61, %r61, 0xfffffffc;
+
+    add.u32 %r27, %r52, 16;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r62, %r15, %r32;
+    and.b32 %r56, %r62, 3;
+    mad.lo.u32 %r82, %r56, 0x1111, %r78;
+    and.b32 %r62, %r62, 0xfffffffc;
+
+    add.u32 %r27, %r52, 24;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r63, %r15, %r32;
+    and.b32 %r56, %r63, 3;
+    mad.lo.u32 %r83, %r56, 0x1111, %r78;
+    and.b32 %r63, %r63, 0xfffffffc;
+
+    add.u32 %r27, %r52, 32;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r64, %r15, %r32;
+    and.b32 %r56, %r64, 3;
+    mad.lo.u32 %r84, %r56, 0x1111, %r78;
+    and.b32 %r64, %r64, 0xfffffffc;
+
+    add.u32 %r27, %r52, 40;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r65, %r15, %r32;
+    and.b32 %r56, %r65, 3;
+    mad.lo.u32 %r85, %r56, 0x1111, %r78;
+    and.b32 %r65, %r65, 0xfffffffc;
+
+    add.u32 %r27, %r52, 48;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r66, %r15, %r32;
+    and.b32 %r56, %r66, 3;
+    mad.lo.u32 %r86, %r56, 0x1111, %r78;
+    and.b32 %r66, %r66, 0xfffffffc;
+
+    add.u32 %r27, %r52, 56;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r67, %r15, %r32;
+    and.b32 %r56, %r67, 3;
+    mad.lo.u32 %r87, %r56, 0x1111, %r78;
+    and.b32 %r67, %r67, 0xfffffffc;
+
+    add.u32 %r27, %r52, 64;
+    div.u32 %r28, %r27, 9;
+    rem.u32 %r29, %r27, 9;
+    div.u32 %r30, %r29, 3;
+    rem.u32 %r31, %r29, 3;
+    mad.lo.u32 %r32, %r30, 56, %r31;
+    mad.lo.u32 %r32, %r28, 3136, %r32;
+    add.u32 %r68, %r15, %r32;
+    and.b32 %r56, %r68, 3;
+    mad.lo.u32 %r88, %r56, 0x1111, %r78;
+    and.b32 %r68, %r68, 0xfffffffc;
+
+    // Distribute aligned weight vectors across all four warps.
+    shr.u32 %r16, %r0, 2;
+    add.u32 %r17, %r16, %r4;
+    and.b32 %r18, %r0, 3;
+    shl.b32 %r18, %r18, 4;
+    mad.lo.u32 %r19, %r17, 576, %r18;
+    cvt.u64.u32 %rd4, %r19;
+    add.u64 %rd4, %rd1, %rd4;
+    mad.lo.u32 %r20, %r16, 64, %r18;
+    shr.u32 %r21, %r20, 3;
+    and.b32 %r21, %r21, 48;
+    xor.b32 %r20, %r20, %r21;
+    add.u32 %r20, %r20, %r5;
+
+    // Both operands use 64-byte swizzling; activations are N-major.
+    cvt.u64.u32 %rd5, %r5;
+    shr.u64 %rd5, %rd5, 4;
+    mov.u64 %rd6, 0x8000402000010000;
+    or.b64 %rd6, %rd6, %rd5;
+    mov.u64 %rd7, 0x8000402001000200;
+    or.b64 %rd7, %rd7, %rd5;
+    mov.u32 %r22, 0x08110010;
+    mov.u32 %r23, 0;
+    mov.u32 %r70, 0;
+    mov.u32 %r71, 0;
+    mov.u32 %r24, 0;
+    mov.u32 %r51, 0;
+    setp.ne.u32 %p2, %r23, 0;
+    mov.u32 %r58, 0;
+
+K_LOOP:
+    // Alternate two 12 KiB buffers, waiting only before a buffer is reused.
+    shr.u32 %r72, %r70, 1;
+    xor.b32 %r72, %r72, 1;
+    and.b32 %r72, %r72, 1;
+    setp.ne.u32 %p8, %r71, 0;
+    selp.u32 %r73, %r69, %r6, %p8;
+    setp.lt.u32 %p9, %r70, 2;
+    @%p9 bra BUFFER_READY;
+WAIT_BUFFER:
+    mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 %p4, [%r73], %r72;
+    @!%p4 bra WAIT_BUFFER;
+BUFFER_READY:
+    add.u32 %r74, %r20, %r71;
+    add.u32 %r75, %r53, %r71;
+
+    // Stage weights asynchronously while gathering the activation tile.
+    cvt.u64.u32 %rd8, %r23;
+    add.u64 %rd8, %rd4, %rd8;
+    cp.async.cg.shared.global [%r74], [%rd8], 16;
+    add.u32 %r25, %r74, 2048;
+    add.u64 %rd9, %rd8, 18432;
+    cp.async.cg.shared.global [%r25], [%rd9], 16;
+    add.u32 %r25, %r74, 4096;
+    add.u64 %rd9, %rd8, 36864;
+    cp.async.cg.shared.global [%r25], [%rd9], 16;
+    add.u32 %r25, %r74, 6144;
+    add.u64 %rd9, %rd8, 55296;
+    cp.async.cg.shared.global [%r25], [%rd9], 16;
+    cp.async.commit_group;
+
+    // Assemble four FP8 pixels per load pair; suppress unnecessary high words.
+    cvt.u64.u32 %rd10, %r60;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r80, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r80;
+    st.shared.b32 [%r75], %r33;
+
+    cvt.u64.u32 %rd10, %r61;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r81, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r81;
+    st.shared.b32 [%r75+512], %r33;
+
+    cvt.u64.u32 %rd10, %r62;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r82, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r82;
+    st.shared.b32 [%r75+1024], %r33;
+
+    cvt.u64.u32 %rd10, %r63;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r83, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r83;
+    st.shared.b32 [%r75+1536], %r33;
+
+    cvt.u64.u32 %rd10, %r64;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r84, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r84;
+    st.shared.b32 [%r75+2048], %r33;
+
+    cvt.u64.u32 %rd10, %r65;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r85, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r85;
+    st.shared.b32 [%r75+2560], %r33;
+
+    cvt.u64.u32 %rd10, %r66;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r86, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r86;
+    st.shared.b32 [%r75+3072], %r33;
+
+    cvt.u64.u32 %rd10, %r67;
+    add.u64 %rd10, %rd0, %rd10;
+    ld.global.u32 %r57, [%rd10];
+    setp.ne.u32 %p7, %r87, 0x3210;
+    mov.u32 %r58, 0;
+    @%p7 ld.global.u32 %r58, [%rd10+4];
+    prmt.b32 %r33, %r57, %r58, %r87;
+    st.shared.b32 [%r75+3584], %r33;
+
+    // Publish shared operands and issue two ordered FP8 tensor-core operations.
+    cp.async.wait_group 0;
+    fence.proxy.async.shared::cta;
+    bar.sync 0;
+    @!%p0 bra MMA_DONE;
+    shr.u32 %r76, %r71, 4;
+    cvt.u64.u32 %rd14, %r76;
+    add.u64 %rd15, %rd6, %rd14;
+    add.u64 %rd16, %rd7, %rd14;
+    tcgen05.mma.cta_group::1.kind::f8f6f4 [%r8], %rd15, %rd16, %r22, {%r51, %r51, %r51, %r51}, %p2;
+    add.u64 %rd11, %rd15, 2;
+    add.u64 %rd12, %rd16, 128;
+    setp.eq.u32 %p2, %r51, 0;
+    tcgen05.mma.cta_group::1.kind::f8f6f4 [%r8], %rd11, %rd12, %r22, {%r51, %r51, %r51, %r51}, %p2;
+    tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r73];
+MMA_DONE:
+    // Rotate cached origins and selectors, preserving the original K order.
+    mov.u32 %r77, %r68;
+    add.u32 %r68, %r67, 25088;
+    add.u32 %r67, %r66, 25088;
+    add.u32 %r66, %r65, 25088;
+    add.u32 %r65, %r64, 25088;
+    add.u32 %r64, %r63, 25088;
+    add.u32 %r63, %r62, 25088;
+    add.u32 %r62, %r61, 25088;
+    add.u32 %r61, %r60, 25088;
+    mov.u32 %r60, %r77;
+    mov.u32 %r77, %r88;
+    mov.u32 %r88, %r87;
+    mov.u32 %r87, %r86;
+    mov.u32 %r86, %r85;
+    mov.u32 %r85, %r84;
+    mov.u32 %r84, %r83;
+    mov.u32 %r83, %r82;
+    mov.u32 %r82, %r81;
+    mov.u32 %r81, %r80;
+    mov.u32 %r80, %r77;
+    setp.eq.u32 %p2, %r0, %r0;
+    xor.b32 %r71, %r71, 12288;
+    add.u32 %r23, %r23, 64;
+    add.u32 %r70, %r70, 1;
+    setp.lt.u32 %p3, %r70, 9;
+    @%p3 bra K_LOOP;
+
+    // The ninth tile signals buffer zero with barrier parity zero.
+WAIT_FINAL:
+    mbarrier.try_wait.parity.acquire.cta.shared::cta.b64 %p4, [%r6], 0;
+    @!%p4 bra WAIT_FINAL;
+
+    // Read one completed FP32 output channel per lane.
+    tcgen05.fence::after_thread_sync;
+    and.b32 %r36, %r0, 96;
+    shl.b32 %r36, %r36, 16;
+    add.u32 %r36, %r36, %r8;
+    tcgen05.ld.sync.aligned.32x32b.x64.b32 {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7, %f8, %f9, %f10, %f11, %f12, %f13, %f14, %f15, %f16, %f17, %f18, %f19, %f20, %f21, %f22, %f23, %f24, %f25, %f26, %f27, %f28, %f29, %f30, %f31, %f32, %f33, %f34, %f35, %f36, %f37, %f38, %f39, %f40, %f41, %f42, %f43, %f44, %f45, %f46, %f47, %f48, %f49, %f50, %f51, %f52, %f53, %f54, %f55, %f56, %f57, %f58, %f59, %f60, %f61, %f62, %f63}, [%r36];
+    tcgen05.wait::ld.sync.aligned;
+
+    // Reuse operand storage for a conflict-free, 16 KiB FP16 transpose tile.
+    shl.b32 %r37, %r0, 7;
+    and.b32 %r38, %r0, 15;
+    shl.b32 %r38, %r38, 3;
+    add.u32 %r37, %r37, %r38;
+    add.u32 %r37, %r37, %r5;
+    cvt.rn.f16x2.f32 %h0, %f1, %f0;
+    cvt.rn.f16x2.f32 %h1, %f3, %f2;
+    xor.b32 %r39, %r37, 0;
+    st.shared.v2.b32 [%r39], {%h0, %h1};
+    cvt.rn.f16x2.f32 %h2, %f5, %f4;
+    cvt.rn.f16x2.f32 %h3, %f7, %f6;
+    xor.b32 %r39, %r37, 8;
+    st.shared.v2.b32 [%r39], {%h2, %h3};
+    cvt.rn.f16x2.f32 %h4, %f9, %f8;
+    cvt.rn.f16x2.f32 %h5, %f11, %f10;
+    xor.b32 %r39, %r37, 16;
+    st.shared.v2.b32 [%r39], {%h4, %h5};
+    cvt.rn.f16x2.f32 %h6, %f13, %f12;
+    cvt.rn.f16x2.f32 %h7, %f15, %f14;
+    xor.b32 %r39, %r37, 24;
+    st.shared.v2.b32 [%r39], {%h6, %h7};
+    cvt.rn.f16x2.f32 %h8, %f17, %f16;
+    cvt.rn.f16x2.f32 %h9, %f19, %f18;
+    xor.b32 %r39, %r37, 32;
+    st.shared.v2.b32 [%r39], {%h8, %h9};
+    cvt.rn.f16x2.f32 %h10, %f21, %f20;
+    cvt.rn.f16x2.f32 %h11, %f23, %f22;
+    xor.b32 %r39, %r37, 40;
+    st.shared.v2.b32 [%r39], {%h10, %h11};
+    cvt.rn.f16x2.f32 %h12, %f25, %f24;
+    cvt.rn.f16x2.f32 %h13, %f27, %f26;
+    xor.b32 %r39, %r37, 48;
+    st.shared.v2.b32 [%r39], {%h12, %h13};
+    cvt.rn.f16x2.f32 %h14, %f29, %f28;
+    cvt.rn.f16x2.f32 %h15, %f31, %f30;
+    xor.b32 %r39, %r37, 56;
+    st.shared.v2.b32 [%r39], {%h14, %h15};
+    cvt.rn.f16x2.f32 %h16, %f33, %f32;
+    cvt.rn.f16x2.f32 %h17, %f35, %f34;
+    xor.b32 %r39, %r37, 64;
+    st.shared.v2.b32 [%r39], {%h16, %h17};
+    cvt.rn.f16x2.f32 %h18, %f37, %f36;
+    cvt.rn.f16x2.f32 %h19, %f39, %f38;
+    xor.b32 %r39, %r37, 72;
+    st.shared.v2.b32 [%r39], {%h18, %h19};
+    cvt.rn.f16x2.f32 %h20, %f41, %f40;
+    cvt.rn.f16x2.f32 %h21, %f43, %f42;
+    xor.b32 %r39, %r37, 80;
+    st.shared.v2.b32 [%r39], {%h20, %h21};
+    cvt.rn.f16x2.f32 %h22, %f45, %f44;
+    cvt.rn.f16x2.f32 %h23, %f47, %f46;
+    xor.b32 %r39, %r37, 88;
+    st.shared.v2.b32 [%r39], {%h22, %h23};
+    cvt.rn.f16x2.f32 %h24, %f49, %f48;
+    cvt.rn.f16x2.f32 %h25, %f51, %f50;
+    xor.b32 %r39, %r37, 96;
+    st.shared.v2.b32 [%r39], {%h24, %h25};
+    cvt.rn.f16x2.f32 %h26, %f53, %f52;
+    cvt.rn.f16x2.f32 %h27, %f55, %f54;
+    xor.b32 %r39, %r37, 104;
+    st.shared.v2.b32 [%r39], {%h26, %h27};
+    cvt.rn.f16x2.f32 %h28, %f57, %f56;
+    cvt.rn.f16x2.f32 %h29, %f59, %f58;
+    xor.b32 %r39, %r37, 112;
+    st.shared.v2.b32 [%r39], {%h28, %h29};
+    cvt.rn.f16x2.f32 %h30, %f61, %f60;
+    cvt.rn.f16x2.f32 %h31, %f63, %f62;
+    xor.b32 %r39, %r37, 120;
+    st.shared.v2.b32 [%r39], {%h30, %h31};
+    bar.sync 0;
+
+    // Compute exact NCHW addresses for coalesced four-pixel output vectors.
+    and.b32 %r40, %r0, 15;
+    shl.b32 %r41, %r40, 2;
+    add.u32 %r41, %r41, %r3;
+    div.u32 %r42, %r41, 2916;
+    rem.u32 %r43, %r41, 2916;
+    shr.u32 %r44, %r0, 4;
+    add.u32 %r45, %r44, %r4;
+    mad.lo.u32 %r46, %r45, 2916, %r43;
+    mad.lo.u32 %r46, %r42, 373248, %r46;
+    mul.wide.u32 %rd13, %r46, 2;
+    add.u64 %rd13, %rd2, %rd13;
+    xor.b32 %r48, %r44, %r40;
+    shl.b32 %r48, %r48, 3;
+    mad.lo.u32 %r49, %r44, 128, %r48;
+    add.u32 %r49, %r49, %r5;
+    mov.u32 %r47, 0;
+STORE_LOOP:
+    // Each pass stores 32 channels with aligned vector writes.
+    xor.b32 %r48, %r49, 64;
+    ld.shared.v2.b32 {%r50, %r54}, [%r49];
+    st.global.v2.b32 [%rd13], {%r50, %r54};
+    ld.shared.v2.b32 {%r50, %r54}, [%r48+1024];
+    st.global.v2.b32 [%rd13+46656], {%r50, %r54};
+    ld.shared.v2.b32 {%r50, %r54}, [%r49+2048];
+    st.global.v2.b32 [%rd13+93312], {%r50, %r54};
+    ld.shared.v2.b32 {%r50, %r54}, [%r48+3072];
+    st.global.v2.b32 [%rd13+139968], {%r50, %r54};
+    add.u32 %r49, %r49, 4096;
+    add.u64 %rd13, %rd13, 186624;
+    add.u32 %r47, %r47, 1;
+    setp.lt.u32 %p5, %r47, 4;
+    @%p5 bra STORE_LOOP;
+
+    // Retire tensor memory after all readers have completed.
+    bar.sync 0;
+    @%p1 tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r8, 64;
+    @%p0 mbarrier.inval.shared::cta.b64 [%r6];
+    @%p0 mbarrier.inval.shared::cta.b64 [%r69];
+    ret;
+}

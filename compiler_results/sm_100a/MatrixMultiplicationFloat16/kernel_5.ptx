@@ -1,0 +1,326 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 a_ptr,
+    .param .u64 b_ptr,
+    .param .u64 c_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<8>;
+    .reg .b32 %r<48>, %h<16>;
+    .reg .b64 %g<16>, %d<8>;
+    .reg .f32 %f<64>;
+
+    // Locate this 256 by 256 output tile. All tiles are completely in bounds.
+    ld.param.u64 %g0, [a_ptr];
+    ld.param.u64 %g1, [b_ptr];
+    ld.param.u64 %g2, [c_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    mov.u32 %r3, global_smem;
+    mul.wide.u32 %g3, %r1, 2097152;
+    add.u64 %g0, %g0, %g3;
+    add.u64 %g2, %g2, %g3;
+    mul.wide.u32 %g3, %r2, 512;
+    add.u64 %g1, %g1, %g3;
+    add.u64 %g2, %g2, %g3;
+
+    // Three 64 KB stages occupy bytes 0 through 196607; two barriers use the final 16 bytes.
+    add.u32 %r4, %r3, 196608;
+    add.u32 %r28, %r4, 8;
+    add.u32 %r5, %r3, 196600;
+
+    // Temporarily place the tensor allocation handle in the not-yet-used third stage.
+    setp.lt.u32 %p0, %r0, 32;
+    @%p0 tcgen05.alloc.cta_group::1.sync.aligned.shared::cta.b32 [%r5], 512;
+    @%p0 tcgen05.relinquish_alloc_permit.cta_group::1.sync.aligned;
+    setp.eq.u32 %p1, %r0, 0;
+    @%p1 mbarrier.init.shared::cta.b64 [%r4], 1;
+    @%p1 mbarrier.init.shared::cta.b64 [%r28], 1;
+    fence.proxy.async.shared::cta;
+    bar.sync 0;
+    ld.shared.u32 %r6, [%r5];
+    add.u32 %r7, %r6, 256;
+
+    // Map each thread to coalesced A vectors and their 128-byte swizzled shared addresses.
+    shr.u32 %r8, %r0, 3;
+    and.b32 %r9, %r0, 7;
+    shl.b32 %r10, %r9, 4;
+    mad.lo.u32 %r11, %r8, 8192, %r10;
+    cvt.u64.u32 %g3, %r11;
+    add.u64 %g0, %g0, %g3;
+    and.b32 %r11, %r8, 7;
+    xor.b32 %r11, %r11, %r9;
+    shl.b32 %r11, %r11, 4;
+    mad.lo.u32 %r12, %r8, 128, %r11;
+
+    // B uses N-major swizzled atoms containing eight rows and 64 columns.
+    shr.u32 %r8, %r0, 5;
+    and.b32 %r9, %r0, 31;
+    shl.b32 %r10, %r9, 4;
+    mad.lo.u32 %r11, %r8, 8192, %r10;
+    cvt.u64.u32 %g3, %r11;
+    add.u64 %g1, %g1, %g3;
+    shr.u32 %r10, %r9, 3;
+    and.b32 %r9, %r9, 7;
+    xor.b32 %r9, %r9, %r8;
+    shl.b32 %r9, %r9, 4;
+    mad.lo.u32 %r13, %r8, 128, %r9;
+    mad.lo.u32 %r13, %r10, 1024, %r13;
+    add.u32 %r13, %r13, 32768;
+
+    // Initialize the copy and compute cursors; the instruction descriptor selects FP32 accumulation.
+    mov.u32 %r14, 0;
+    mov.u32 %r15, 0;
+    mov.u32 %r16, 0;
+    mov.u32 %r17, 0;
+    mov.u32 %r19, 0x08410010;
+    mov.u32 %r27, 0;
+    bra COPY_STAGE;
+
+COPY_STAGE:
+    // Copy eight A and eight B vectors per thread, with larger L2 prefetches for A.
+    add.u32 %r20, %r3, %r14;
+    add.u32 %r21, %r20, %r12;
+    add.u32 %r22, %r20, %r13;
+    cp.async.cg.shared.global.L2::256B [%r21], [%g0], 16;
+    cp.async.cg.shared.global.L2::128B [%r22], [%g1], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+4096], [%g0+262144], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+4096], [%g1+65536], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+8192], [%g0+524288], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+8192], [%g1+131072], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+12288], [%g0+786432], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+12288], [%g1+196608], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+16384], [%g0+1048576], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+16384], [%g1+262144], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+20480], [%g0+1310720], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+20480], [%g1+327680], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+24576], [%g0+1572864], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+24576], [%g1+393216], 16;
+    cp.async.cg.shared.global.L2::256B [%r21+28672], [%g0+1835008], 16;
+    cp.async.cg.shared.global.L2::128B [%r22+28672], [%g1+458752], 16;
+    cp.async.commit_group;
+
+    // Advance by 64 reduction elements and wrap the three-stage ring.
+    add.u64 %g0, %g0, 128;
+    add.u64 %g1, %g1, 524288;
+    add.u32 %r14, %r14, 65536;
+    setp.eq.u32 %p2, %r14, 196608;
+    @%p2 mov.u32 %r14, 0;
+    add.u32 %r15, %r15, 1;
+    setp.lt.u32 %p2, %r15, 2;
+    @%p2 bra COPY_STAGE;
+    setp.eq.u32 %p2, %r15, 2;
+    @%p2 bra COMPUTE;
+    bra ADVANCE;
+
+COMPUTE:
+    // Await only the oldest copy group; publish its writes before tensor-core access.
+    cp.async.wait_group 1;
+    fence.proxy.async.shared::cta;
+    bar.sync 0;
+    @!%p1 bra PREFETCH;
+    tcgen05.fence::after_thread_sync;
+
+    // Build descriptors for two M=128 row halves and their common N=256 B tile.
+    add.u32 %r20, %r3, %r16;
+    shr.u32 %r20, %r20, 4;
+    cvt.u64.u32 %d0, %r20;
+    or.b64 %d0, %d0, 0x4000404000010000;
+    add.u64 %d1, %d0, 1024;
+    add.u32 %r20, %r20, 2048;
+    cvt.u64.u32 %d2, %r20;
+    or.b64 %d2, %d2, 0x4000410000400000;
+    setp.ne.u32 %p3, %r17, 0;
+
+    // Accumulate four K=16 slices. Only the first reduction slice starts from zero.
+    tcgen05.mma.cta_group::1.kind::f16 [%r6], %d0, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    tcgen05.mma.cta_group::1.kind::f16 [%r7], %d1, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    setp.eq.u32 %p3, %r0, 0;
+    add.u64 %d0, %d0, 2;
+    add.u64 %d1, %d1, 2;
+    add.u64 %d2, %d2, 512;
+    tcgen05.mma.cta_group::1.kind::f16 [%r6], %d0, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    tcgen05.mma.cta_group::1.kind::f16 [%r7], %d1, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    add.u64 %d0, %d0, 2;
+    add.u64 %d1, %d1, 2;
+    add.u64 %d2, %d2, 512;
+    tcgen05.mma.cta_group::1.kind::f16 [%r6], %d0, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    tcgen05.mma.cta_group::1.kind::f16 [%r7], %d1, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    add.u64 %d0, %d0, 2;
+    add.u64 %d1, %d1, 2;
+    add.u64 %d2, %d2, 512;
+    tcgen05.mma.cta_group::1.kind::f16 [%r6], %d0, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+    tcgen05.mma.cta_group::1.kind::f16 [%r7], %d1, %d2, %r19, {%r27, %r27, %r27, %r27}, %p3;
+
+    // Alternate completion barriers so two tensor groups can remain active.
+    and.b32 %r28, %r17, 1;
+    mad.lo.u32 %r28, %r28, 8, %r4;
+    tcgen05.commit.cta_group::1.mbarrier::arrive::one.shared::cluster.b64 [%r28];
+
+PREFETCH:
+    // The next copy reuses the preceding tensor group's stage, not the current one.
+    setp.eq.u32 %p2, %r17, 0;
+    @%p2 bra LOAD_NEXT;
+    sub.u32 %r29, %r17, 1;
+    and.b32 %r28, %r29, 1;
+    mad.lo.u32 %r28, %r28, 8, %r4;
+    shr.u32 %r29, %r29, 1;
+    and.b32 %r29, %r29, 1;
+WAIT_PREVIOUS:
+    mbarrier.try_wait.parity.shared::cta.b64 %p4, [%r28], %r29;
+    @!%p4 bra WAIT_PREVIOUS;
+LOAD_NEXT:
+    // Stop global reads at K=4096; empty groups preserve the final pipeline waits.
+    setp.lt.u32 %p2, %r15, 64;
+    @%p2 bra COPY_STAGE;
+    cp.async.commit_group;
+
+ADVANCE:
+    // Advance the compute cursor while the newest tensor group remains active.
+    add.u32 %r16, %r16, 65536;
+    setp.eq.u32 %p2, %r16, 196608;
+    @%p2 mov.u32 %r16, 0;
+    add.u32 %r17, %r17, 1;
+    setp.lt.u32 %p2, %r17, 64;
+    @%p2 bra COMPUTE;
+
+    // Drain all asynchronous work before reusing shared operands for the epilogue.
+    add.u32 %r28, %r4, 8;
+WAIT_FINAL:
+    mbarrier.try_wait.parity.shared::cta.b64 %p4, [%r28], 1;
+    @!%p4 bra WAIT_FINAL;
+    cp.async.wait_group 0;
+    bar.sync 0;
+    tcgen05.fence::after_thread_sync;
+
+    // Map each warp to 32 output rows in the appropriate tensor accumulator.
+    and.b32 %r20, %r0, 96;
+    shl.b32 %r20, %r20, 16;
+    shr.u32 %r21, %r0, 7;
+    shl.b32 %r21, %r21, 8;
+    add.u32 %r20, %r20, %r21;
+    add.u32 %r20, %r20, %r6;
+
+    // Supply stmatrix with aligned, bank-conflict-free shared row addresses.
+    and.b32 %r21, %r0, 224;
+    and.b32 %r22, %r0, 15;
+    add.u32 %r21, %r21, %r22;
+    and.b32 %r22, %r0, 16;
+    and.b32 %r23, %r21, 7;
+    shl.b32 %r23, %r23, 4;
+    xor.b32 %r22, %r22, %r23;
+    mad.lo.u32 %r21, %r21, 512, %r22;
+    add.u32 %r21, %r21, %r3;
+    mov.u32 %r24, 0;
+STORE_ROWS:
+    mov.u32 %r25, 0;
+    mov.u32 %r26, %r20;
+    mov.u32 %r30, %r21;
+STORE_COLS:
+    // Load a 16 by 128 FP32 fragment and round each output exactly once to half.
+    tcgen05.ld.sync.aligned.16x256b.x16.b32 {%f0, %f1, %f2, %f3, %f4, %f5, %f6, %f7, %f8, %f9, %f10, %f11, %f12, %f13, %f14, %f15, %f16, %f17, %f18, %f19, %f20, %f21, %f22, %f23, %f24, %f25, %f26, %f27, %f28, %f29, %f30, %f31, %f32, %f33, %f34, %f35, %f36, %f37, %f38, %f39, %f40, %f41, %f42, %f43, %f44, %f45, %f46, %f47, %f48, %f49, %f50, %f51, %f52, %f53, %f54, %f55, %f56, %f57, %f58, %f59, %f60, %f61, %f62, %f63}, [%r26];
+    tcgen05.wait::ld.sync.aligned;
+
+    // Pack and store four 8 by 8 matrices per instruction into the shared output tile.
+    cvt.rn.f16x2.f32 %h0, %f1, %f0;
+    cvt.rn.f16x2.f32 %h1, %f3, %f2;
+    cvt.rn.f16x2.f32 %h2, %f5, %f4;
+    cvt.rn.f16x2.f32 %h3, %f7, %f6;
+    xor.b32 %r31, %r30, 0;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f9, %f8;
+    cvt.rn.f16x2.f32 %h1, %f11, %f10;
+    cvt.rn.f16x2.f32 %h2, %f13, %f12;
+    cvt.rn.f16x2.f32 %h3, %f15, %f14;
+    xor.b32 %r31, %r30, 32;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f17, %f16;
+    cvt.rn.f16x2.f32 %h1, %f19, %f18;
+    cvt.rn.f16x2.f32 %h2, %f21, %f20;
+    cvt.rn.f16x2.f32 %h3, %f23, %f22;
+    xor.b32 %r31, %r30, 64;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f25, %f24;
+    cvt.rn.f16x2.f32 %h1, %f27, %f26;
+    cvt.rn.f16x2.f32 %h2, %f29, %f28;
+    cvt.rn.f16x2.f32 %h3, %f31, %f30;
+    xor.b32 %r31, %r30, 96;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f33, %f32;
+    cvt.rn.f16x2.f32 %h1, %f35, %f34;
+    cvt.rn.f16x2.f32 %h2, %f37, %f36;
+    cvt.rn.f16x2.f32 %h3, %f39, %f38;
+    xor.b32 %r31, %r30, 128;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f41, %f40;
+    cvt.rn.f16x2.f32 %h1, %f43, %f42;
+    cvt.rn.f16x2.f32 %h2, %f45, %f44;
+    cvt.rn.f16x2.f32 %h3, %f47, %f46;
+    xor.b32 %r31, %r30, 160;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f49, %f48;
+    cvt.rn.f16x2.f32 %h1, %f51, %f50;
+    cvt.rn.f16x2.f32 %h2, %f53, %f52;
+    cvt.rn.f16x2.f32 %h3, %f55, %f54;
+    xor.b32 %r31, %r30, 192;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+    cvt.rn.f16x2.f32 %h0, %f57, %f56;
+    cvt.rn.f16x2.f32 %h1, %f59, %f58;
+    cvt.rn.f16x2.f32 %h2, %f61, %f60;
+    cvt.rn.f16x2.f32 %h3, %f63, %f62;
+    xor.b32 %r31, %r30, 224;
+    stmatrix.sync.aligned.m8n8.x4.shared.b16 [%r31], {%h0, %h1, %h2, %h3};
+
+    // Visit both column fragments and both sixteen-row halves assigned to each warp.
+    add.u32 %r26, %r26, 128;
+    add.u32 %r30, %r30, 256;
+    add.u32 %r25, %r25, 1;
+    setp.lt.u32 %p2, %r25, 2;
+    @%p2 bra STORE_COLS;
+    add.u32 %r20, %r20, 1048576;
+    add.u32 %r21, %r21, 8192;
+    add.u32 %r24, %r24, 1;
+    setp.lt.u32 %p2, %r24, 2;
+    @%p2 bra STORE_ROWS;
+
+    // Publish the complete half tile and release tensor memory after every read finishes.
+    bar.sync 0;
+    @%p0 tcgen05.dealloc.cta_group::1.sync.aligned.b32 %r6, 512;
+
+    // Remap all threads to contiguous sixteen-byte output vectors along N.
+    shr.u32 %r20, %r0, 5;
+    and.b32 %r21, %r0, 31;
+    shl.b32 %r21, %r21, 4;
+    mad.lo.u32 %r22, %r20, 8192, %r21;
+    cvt.u64.u32 %g3, %r22;
+    add.u64 %g4, %g2, %g3;
+    shl.b32 %r22, %r20, 4;
+    xor.b32 %r21, %r21, %r22;
+    mad.lo.u32 %r22, %r20, 512, %r21;
+    add.u32 %r22, %r22, %r3;
+    mov.u32 %r23, 0;
+WRITE_GLOBAL:
+    // Coalesced vector stores cover all rows of the output tile.
+    ld.shared.v4.b32 {%h0, %h1, %h2, %h3}, [%r22];
+    st.global.v4.b32 [%g4], {%h0, %h1, %h2, %h3};
+    ld.shared.v4.b32 {%h0, %h1, %h2, %h3}, [%r22+4096];
+    st.global.v4.b32 [%g4+65536], {%h0, %h1, %h2, %h3};
+    ld.shared.v4.b32 {%h0, %h1, %h2, %h3}, [%r22+8192];
+    st.global.v4.b32 [%g4+131072], {%h0, %h1, %h2, %h3};
+    ld.shared.v4.b32 {%h0, %h1, %h2, %h3}, [%r22+12288];
+    st.global.v4.b32 [%g4+196608], {%h0, %h1, %h2, %h3};
+    add.u32 %r22, %r22, 16384;
+    add.u64 %g4, %g4, 262144;
+    add.u32 %r23, %r23, 1;
+    setp.lt.u32 %p2, %r23, 8;
+    @%p2 bra WRITE_GLOBAL;
+    ret;
+}

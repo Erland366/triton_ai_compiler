@@ -1,0 +1,30 @@
+{
+  "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 gate_ptr,\n    .param .u64 value_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %g,%v,%o,%off;\n    .reg .b32 %t,%b,%i,%G<4>,%V<4>,%O<4>;\n    .reg .b16 %h<8>,%k<8>,%z<8>;\n    .reg .f32 %x<8>,%y<8>,%e<8>;\n\n    // Each thread owns eight adjacent halves; the CTA covers 1024 elements.\n    ld.param.u64 %g,[gate_ptr];\n    ld.param.u64 %v,[value_ptr];\n    ld.param.u64 %o,[output_ptr];\n    mov.u32 %t,%tid.x;\n    mov.u32 %b,%ctaid.x;\n    shl.b32 %t,%t,3;\n    mad.lo.u32 %i,%b,1024,%t;\n    mul.wide.u32 %off,%i,2;\n    add.u64 %g,%g,%off;\n    add.u64 %v,%v,%off;\n    add.u64 %o,%o,%off;\n\n    // Aligned vector loads fetch all inputs; every tile is full.\n    ld.global.v4.b32 {%G0,%G1,%G2,%G3},[%g];\n    ld.global.v4.b32 {%V0,%V1,%V2,%V3},[%v];\n\n    // Unpack halves and convert to single precision.\n    mov.b32 {%h0,%h1},%G0;\n    mov.b32 {%h2,%h3},%G1;\n    mov.b32 {%h4,%h5},%G2;\n    mov.b32 {%h6,%h7},%G3;\n    mov.b32 {%k0,%k1},%V0;\n    mov.b32 {%k2,%k3},%V1;\n    mov.b32 {%k4,%k5},%V2;\n    mov.b32 {%k6,%k7},%V3;\n    cvt.f32.f16 %x0,%h0;\n    cvt.f32.f16 %x1,%h1;\n    cvt.f32.f16 %x2,%h2;\n    cvt.f32.f16 %x3,%h3;\n    cvt.f32.f16 %x4,%h4;\n    cvt.f32.f16 %x5,%h5;\n    cvt.f32.f16 %x6,%h6;\n    cvt.f32.f16 %x7,%h7;\n    cvt.f32.f16 %y0,%k0;\n    cvt.f32.f16 %y1,%k1;\n    cvt.f32.f16 %y2,%k2;\n    cvt.f32.f16 %y3,%k3;\n    cvt.f32.f16 %y4,%k4;\n    cvt.f32.f16 %y5,%k5;\n    cvt.f32.f16 %y6,%k6;\n    cvt.f32.f16 %y7,%k7;\n\n    // Compute exp(-gate) using base-two exponentials.\n    mul.f32 %e0,%x0,0fBFB8AA3B;\n    mul.f32 %e1,%x1,0fBFB8AA3B;\n    mul.f32 %e2,%x2,0fBFB8AA3B;\n    mul.f32 %e3,%x3,0fBFB8AA3B;\n    mul.f32 %e4,%x4,0fBFB8AA3B;\n    mul.f32 %e5,%x5,0fBFB8AA3B;\n    mul.f32 %e6,%x6,0fBFB8AA3B;\n    mul.f32 %e7,%x7,0fBFB8AA3B;\n    ex2.approx.f32 %e0,%e0;\n    ex2.approx.f32 %e1,%e1;\n    ex2.approx.f32 %e2,%e2;\n    ex2.approx.f32 %e3,%e3;\n    ex2.approx.f32 %e4,%e4;\n    ex2.approx.f32 %e5,%e5;\n    ex2.approx.f32 %e6,%e6;\n    ex2.approx.f32 %e7,%e7;\n\n    // Form sigmoid reciprocals in single precision.\n    add.f32 %e0,%e0,0f3F800000;\n    add.f32 %e1,%e1,0f3F800000;\n    add.f32 %e2,%e2,0f3F800000;\n    add.f32 %e3,%e3,0f3F800000;\n    add.f32 %e4,%e4,0f3F800000;\n    add.f32 %e5,%e5,0f3F800000;\n    add.f32 %e6,%e6,0f3F800000;\n    add.f32 %e7,%e7,0f3F800000;\n    rcp.approx.f32 %e0,%e0;\n    rcp.approx.f32 %e1,%e1;\n    rcp.approx.f32 %e2,%e2;\n    rcp.approx.f32 %e3,%e3;\n    rcp.approx.f32 %e4,%e4;\n    rcp.approx.f32 %e5,%e5;\n    rcp.approx.f32 %e6,%e6;\n    rcp.approx.f32 %e7,%e7;\n\n    // Multiply gate by sigmoid, then by value, preserving operation order.\n    mul.f32 %x0,%x0,%e0;\n    mul.f32 %x1,%x1,%e1;\n    mul.f32 %x2,%x2,%e2;\n    mul.f32 %x3,%x3,%e3;\n    mul.f32 %x4,%x4,%e4;\n    mul.f32 %x5,%x5,%e5;\n    mul.f32 %x6,%x6,%e6;\n    mul.f32 %x7,%x7,%e7;\n    mul.f32 %x0,%x0,%y0;\n    mul.f32 %x1,%x1,%y1;\n    mul.f32 %x2,%x2,%y2;\n    mul.f32 %x3,%x3,%y3;\n    mul.f32 %x4,%x4,%y4;\n    mul.f32 %x5,%x5,%y5;\n    mul.f32 %x6,%x6,%y6;\n    mul.f32 %x7,%x7,%y7;\n\n    // Round to half precision and issue one aligned vector store.\n    cvt.rn.f16.f32 %z0,%x0;\n    cvt.rn.f16.f32 %z1,%x1;\n    cvt.rn.f16.f32 %z2,%x2;\n    cvt.rn.f16.f32 %z3,%x3;\n    cvt.rn.f16.f32 %z4,%x4;\n    cvt.rn.f16.f32 %z5,%x5;\n    cvt.rn.f16.f32 %z6,%x6;\n    cvt.rn.f16.f32 %z7,%x7;\n    mov.b32 %O0,{%z0,%z1};\n    mov.b32 %O1,{%z2,%z3};\n    mov.b32 %O2,{%z4,%z5};\n    mov.b32 %O3,{%z6,%z7};\n    st.global.v4.b32 [%o],{%O0,%O1,%O2,%O3};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 0.9989543245432054,
+  "p50": 0.007956479862332343,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.00792972058222992,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA H100 80GB HBM3",
+  "run_cost_usd_so_far": 0.41489699999999996
+}

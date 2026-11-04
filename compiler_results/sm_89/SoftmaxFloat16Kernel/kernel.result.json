@@ -1,0 +1,34 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 output_ptr,\n    .param .u64 input_ptr,\n    .param .u32 input_row_stride,\n    .param .u32 output_row_stride,\n    .param .u32 n_rows,\n    .param .u32 n_cols,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %p<4>;\n    .reg .b16 %h<20>;\n    .reg .b32 %r<40>;\n    .reg .b64 %rd<12>;\n    .reg .f32 %f<24>;\n\n    // Warp zero handles eight columns per lane; the other launched warps exit.\n    mov.u32 %r3, %ctaid.x;\n    ld.param.u32 %r2, [n_rows];\n    mov.u32 %r5, %tid.x;\n    setp.ge.u32 %p0, %r5, 32;\n    setp.ge.or.u32 %p0, %r3, %r2, %p0;\n    @%p0 ret.uni;\n\n    // Convert the runtime strides to bytes and form lane-relative base pointers.\n    ld.param.u64 %rd0, [output_ptr];\n    ld.param.u64 %rd1, [input_ptr];\n    ld.param.u32 %r0, [input_row_stride];\n    ld.param.u32 %r1, [output_row_stride];\n    mov.u32 %r4, %nctaid.x;\n    shl.b32 %r0, %r0, 1;\n    shl.b32 %r1, %r1, 1;\n    mul.wide.u32 %rd2, %r5, 16;\n    add.u64 %rd0, %rd0, %rd2;\n    add.u64 %rd1, %rd1, %rd2;\n\nROW_LOOP:\n    // Load eight consecutive halves per lane, covering all 256 unmasked columns.\n    mad.wide.u32 %rd3, %r3, %r0, %rd1;\n    mad.wide.u32 %rd4, %r3, %r1, %rd0;\n    ld.global.cg.v4.b32 {%r10, %r11, %r12, %r13}, [%rd3];\n\n    // Reduce the eight half values locally and duplicate the local maximum.\n    max.NaN.f16x2 %r14, %r10, %r11;\n    max.NaN.f16x2 %r15, %r12, %r13;\n    max.NaN.f16x2 %r14, %r14, %r15;\n    mov.b32 {%h0, %h1}, %r14;\n    max.NaN.f16 %h2, %h0, %h1;\n    mov.b32 %r16, {%h2, %h2};\n\n    // Signed bit patterns order positive halves; negative-only warps need the minimum.\n    redux.sync.max.s32 %r18, %r16, 0xffffffff;\n    setp.lt.s32 %p3, %r18, 0;\n    @%p3 redux.sync.min.s32 %r18, %r16, 0xffffffff;\n\n    // Preserve half-precision subtraction before promoting each difference to float.\n    sub.rn.f16x2 %r20, %r10, %r18;\n    mov.b32 {%h4, %h5}, %r20;\n    cvt.f32.f16 %f0, %h4;\n    cvt.f32.f16 %f1, %h5;\n    sub.rn.f16x2 %r21, %r11, %r18;\n    mov.b32 {%h6, %h7}, %r21;\n    cvt.f32.f16 %f2, %h6;\n    cvt.f32.f16 %f3, %h7;\n    sub.rn.f16x2 %r22, %r12, %r18;\n    mov.b32 {%h8, %h9}, %r22;\n    cvt.f32.f16 %f4, %h8;\n    cvt.f32.f16 %f5, %h9;\n    sub.rn.f16x2 %r23, %r13, %r18;\n    mov.b32 {%h10, %h11}, %r23;\n    cvt.f32.f16 %f6, %h10;\n    cvt.f32.f16 %f7, %h11;\n\n    // Evaluate exp(x) as exp2(x * log2(e)); float underflows cannot affect half outputs.\n    mul.f32 %f0, %f0, 0f3fb8aa3b;\n    mul.f32 %f1, %f1, 0f3fb8aa3b;\n    mul.f32 %f2, %f2, 0f3fb8aa3b;\n    mul.f32 %f3, %f3, 0f3fb8aa3b;\n    mul.f32 %f4, %f4, 0f3fb8aa3b;\n    mul.f32 %f5, %f5, 0f3fb8aa3b;\n    mul.f32 %f6, %f6, 0f3fb8aa3b;\n    mul.f32 %f7, %f7, 0f3fb8aa3b;\n    ex2.approx.ftz.f32 %f0, %f0;\n    ex2.approx.ftz.f32 %f1, %f1;\n    ex2.approx.ftz.f32 %f2, %f2;\n    ex2.approx.ftz.f32 %f3, %f3;\n    ex2.approx.ftz.f32 %f4, %f4;\n    ex2.approx.ftz.f32 %f5, %f5;\n    ex2.approx.ftz.f32 %f6, %f6;\n    ex2.approx.ftz.f32 %f7, %f7;\n\n    // Accumulate locally, then sum the entire row through five warp shuffles.\n    add.f32 %f10, %f0, %f1;\n    add.f32 %f11, %f2, %f3;\n    add.f32 %f12, %f4, %f5;\n    add.f32 %f13, %f6, %f7;\n    add.f32 %f10, %f10, %f11;\n    add.f32 %f12, %f12, %f13;\n    add.f32 %f8, %f10, %f12;\n    shfl.sync.bfly.b32 %f9, %f8, 16, 31, 0xffffffff;\n    add.f32 %f8, %f8, %f9;\n    shfl.sync.bfly.b32 %f9, %f8, 8, 31, 0xffffffff;\n    add.f32 %f8, %f8, %f9;\n    shfl.sync.bfly.b32 %f9, %f8, 4, 31, 0xffffffff;\n    add.f32 %f8, %f8, %f9;\n    shfl.sync.bfly.b32 %f9, %f8, 2, 31, 0xffffffff;\n    add.f32 %f8, %f8, %f9;\n    shfl.sync.bfly.b32 %f9, %f8, 1, 31, 0xffffffff;\n    add.f32 %f8, %f8, %f9;\n\n    // Normalize in float and round the eight outputs to packed half pairs.\n    rcp.approx.ftz.f32 %f8, %f8;\n    mul.f32 %f0, %f0, %f8;\n    mul.f32 %f1, %f1, %f8;\n    mul.f32 %f2, %f2, %f8;\n    mul.f32 %f3, %f3, %f8;\n    mul.f32 %f4, %f4, %f8;\n    mul.f32 %f5, %f5, %f8;\n    mul.f32 %f6, %f6, %f8;\n    mul.f32 %f7, %f7, %f8;\n    cvt.rn.f16x2.f32 %r24, %f1, %f0;\n    cvt.rn.f16x2.f32 %r25, %f3, %f2;\n    cvt.rn.f16x2.f32 %r26, %f5, %f4;\n    cvt.rn.f16x2.f32 %r27, %f7, %f6;\n\n    // Store all columns with one coalesced vector store per lane.\n    st.global.v4.b32 [%rd4], {%r24, %r25, %r26, %r27};\n\n    // Preserve the original program's grid-stride row loop.\n    add.u32 %r3, %r3, %r4;\n    setp.lt.u32 %p1, %r3, %r2;\n    @%p1 bra.uni ROW_LOOP;\n    ret.uni;\n}\n",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "The verifier provides 16 bytes of dynamic shared memory per block."
+  ],
+  "speedup": 1.053333300995745,
+  "p50": 0.009216000325977802,
+  "autotune_metrics": {
+    "operator": "SoftmaxFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 256
+    },
+    "selected_config": {
+      "block_size": 256,
+      "num_warps": 4,
+      "num_stages": 3
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 256,
+        "num_warps": 4,
+        "num_stages": 3
+      },
+      "latency_ms": 0.010207262750720555,
+      "evaluated_configurations": 6,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 5.138679499999999
+}

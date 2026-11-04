@@ -1,0 +1,111 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 input_ptr,
+    .param .u64 cos_ptr,
+    .param .u64 sin_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %second, %done;
+    .reg .b32 %r<18>;
+    .reg .b64 %a<10>;
+    .reg .b16 %h<18>;
+    .reg .f32 %f<24>;
+
+    // Traverse all 128 features with four contiguous features per active lane.
+    mov.u32 %r0, %tid.x;
+    shl.b32 %r0, %r0, 2;
+    setp.ge.u32 %done, %r0, 128;
+    @%done ret;
+    mov.u32 %r1, %ctaid.x;
+    shl.b32 %r2, %r1, 7;
+    ld.param.u64 %a0, [input_ptr];
+    ld.param.u64 %a1, [cos_ptr];
+    ld.param.u64 %a2, [sin_ptr];
+    ld.param.u64 %a3, [output_ptr];
+TILE:
+    // Masking the element index implements the 256-position coefficient cycle.
+    add.u32 %r3, %r2, %r0;
+    and.b32 %r4, %r3, 32767;
+    setp.ge.u32 %second, %r0, 64;
+    cvt.u64.u32 %a4, %r3;
+    cvt.u64.u32 %a5, %r4;
+    add.u64 %a4, %a0, %a4;
+    add.u64 %a6, %a1, %a5;
+    add.u64 %a7, %a2, %a5;
+
+    // Load each input feature only once, together with cosine and sine.
+    ld.global.u32 %r6, [%a4];
+    ld.global.u32 %r7, [%a6];
+    ld.global.u32 %r8, [%a7];
+
+    // Negate both input and cosine in the second half, preserving their product.
+    // Exchanging these signed inputs then directly produces the rotated values.
+    @%second xor.b32 %r6, %r6, 0x80808080;
+    @%second xor.b32 %r7, %r7, 0x80808080;
+    mov.b32 {%h0, %h1}, %r6;
+    mov.b32 {%h2, %h3}, %r7;
+    mov.b32 {%h4, %h5}, %r8;
+
+    // Native FP8-to-FP16 conversion followed by FP32 widening is exact.
+    cvt.rn.f16x2.e4m3x2 %r10, %h0;
+    mov.b32 {%h6, %h7}, %r10;
+    cvt.f32.f16 %f0, %h6;
+    cvt.f32.f16 %f1, %h7;
+    cvt.rn.f16x2.e4m3x2 %r11, %h1;
+    mov.b32 {%h8, %h9}, %r11;
+    cvt.f32.f16 %f2, %h8;
+    cvt.f32.f16 %f3, %h9;
+    cvt.rn.f16x2.e4m3x2 %r12, %h2;
+    mov.b32 {%h10, %h11}, %r12;
+    cvt.f32.f16 %f4, %h10;
+    cvt.f32.f16 %f5, %h11;
+    cvt.rn.f16x2.e4m3x2 %r13, %h3;
+    mov.b32 {%h12, %h13}, %r13;
+    cvt.f32.f16 %f6, %h12;
+    cvt.f32.f16 %f7, %h13;
+    cvt.rn.f16x2.e4m3x2 %r14, %h4;
+    mov.b32 {%h14, %h15}, %r14;
+    cvt.f32.f16 %f8, %h14;
+    cvt.f32.f16 %f9, %h15;
+    cvt.rn.f16x2.e4m3x2 %r15, %h5;
+    mov.b32 {%h16, %h17}, %r15;
+    cvt.f32.f16 %f10, %h16;
+    cvt.f32.f16 %f11, %h17;
+
+    // XOR lane 16 selects partners exactly 64 features away within this warp.
+    shfl.sync.bfly.b32 %f12, %f0, 16, 31, -1;
+    shfl.sync.bfly.b32 %f13, %f1, 16, 31, -1;
+    shfl.sync.bfly.b32 %f14, %f2, 16, 31, -1;
+    shfl.sync.bfly.b32 %f15, %f3, 16, 31, -1;
+
+    // Evaluate the rotary transform in FP32 and round each output once to FP16.
+    mul.f32 %f16, %f12, %f8;
+    mul.f32 %f17, %f13, %f9;
+    mul.f32 %f18, %f14, %f10;
+    mul.f32 %f19, %f15, %f11;
+    fma.rn.f32 %f20, %f0, %f4, %f16;
+    fma.rn.f32 %f21, %f1, %f5, %f17;
+    fma.rn.f32 %f22, %f2, %f6, %f18;
+    fma.rn.f32 %f23, %f3, %f7, %f19;
+    cvt.rn.f16x2.f32 %r16, %f21, %f20;
+    cvt.rn.f16x2.f32 %r17, %f23, %f22;
+
+    // One aligned vector store writes four consecutive FP16 features.
+    mul.wide.u32 %a8, %r3, 2;
+    add.u64 %a8, %a3, %a8;
+    st.global.v2.u32 [%a8], {%r16, %r17};
+
+    // Advance the vectorized thread-stride loop; only one iteration is needed.
+    add.u32 %r0, %r0, 512;
+    setp.lt.u32 %done, %r0, 128;
+    @%done bra TILE;
+    ret;
+}

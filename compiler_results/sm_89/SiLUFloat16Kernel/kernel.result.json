@@ -1,0 +1,31 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<4>;\n    .reg .b64 %rd<6>;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<12>;\n\n    // Each thread handles two adjacent halves, covering the full 512-element tile.\n    ld.param.u64 %rd0, [x_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    mad.lo.u32 %r2, %r0, 256, %r1;\n    mul.wide.u32 %rd2, %r2, 4;\n    add.u64 %rd3, %rd0, %rd2;\n    add.u64 %rd4, %rd1, %rd2;\n\n    // Load both elements without masks and promote to float32.\n    ld.global.v2.b16 {%h0, %h1}, [%rd3];\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n\n    // Compute exp(-x) as exp2(-x * log2(e)).\n    mul.f32 %f2, %f0, 0fBFB8AA3B;\n    mul.f32 %f3, %f1, 0fBFB8AA3B;\n    ex2.approx.f32 %f4, %f2;\n    ex2.approx.f32 %f5, %f3;\n    add.f32 %f6, %f4, 0f3F800000;\n    add.f32 %f7, %f5, 0f3F800000;\n\n    // Compute x / (1 + exp(-x)) independently for both elements.\n    rcp.approx.f32 %f8, %f6;\n    rcp.approx.f32 %f9, %f7;\n    mul.f32 %f10, %f0, %f8;\n    mul.f32 %f11, %f1, %f9;\n\n    // Round to half precision and store the adjacent pair.\n    cvt.rn.f16.f32 %h2, %f10;\n    cvt.rn.f16.f32 %h3, %f11;\n    st.global.v2.b16 [%rd4], {%h2, %h3};\n    ret;\n}",
+  "num_threads_x": 256,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 0.9991662550566641,
+  "p50": 0.009211520310491323,
+  "autotune_metrics": {
+    "operator": "SiLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 8
+      },
+      "latency_ms": 0.008780350888869633,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.397309,
+  "max_budget_usd": 1.0
+}

@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_ycsbF92EyH1W50SHk1J99BBu",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 2.1767655649185182,
+    "triton_p50": 2.1769884252548217,
+    "triton_p80": 2.177130592346191,
+    "triton_p90": 2.1771979846954346,
+    "triton_p95": 2.177254531860352,
+    "triton_p99": 2.177480102443695,
+    "p20": 2.1767330570220946,
+    "p50": 2.176976284980774,
+    "p80": 2.1771194639205933,
+    "p90": 2.177185893058777,
+    "p95": 2.177239375114441,
+    "p99": 2.1773856549263,
+    "speedup_vs_triton": 1.0000055766680287,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.9096124999999999,
+  "autotune_metrics": {
+    "operator": "RoPEFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 128
+    },
+    "selected_config": {
+      "block_size": 128,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 128,
+        "num_warps": 4
+      },
+      "latency_ms": 2.176948628117961,
+      "evaluated_configurations": 3,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0000055766680287,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 input_ptr,\n    .param .u64 cos_ptr,\n    .param .u64 sin_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %p;\n    .reg .b16 %h<4>;\n    .reg .b32 %r<9>;\n    .reg .b64 %rd<10>;\n    .reg .f32 %f<6>;\n\n    // Interleave opposite-half partners in adjacent lanes of every warp.\n    ld.param.u64 %rd0, [input_ptr];\n    ld.param.u64 %rd1, [cos_ptr];\n    ld.param.u64 %rd2, [sin_ptr];\n    ld.param.u64 %rd3, [output_ptr];\n    mov.u32 %r0, %tid.x;\n    mov.u32 %r1, %ctaid.x;\n    bfi.b32 %r2, %r0, %r0, 7, 1;\n    and.b32 %r2, %r2, 254;\n    shl.b32 %r3, %r1, 8;\n    or.b32 %r4, %r3, %r2;\n    and.b32 %r5, %r4, 65535;\n    and.b32 %r6, %r0, 1;\n\n    // Stream input and retain the small, repeating coefficient tables in L1.\n    cvt.u64.u32 %rd4, %r4;\n    cvt.u64.u32 %rd5, %r5;\n    add.u64 %rd6, %rd0, %rd4;\n    add.u64 %rd7, %rd1, %rd5;\n    add.u64 %rd8, %rd2, %rd5;\n    add.u64 %rd9, %rd3, %rd4;\n    ld.global.L1::evict_first.u16 %h0, [%rd6];\n    ld.global.L1::evict_last.u16 %h1, [%rd7];\n    ld.global.L1::evict_last.u16 %h2, [%rd8];\n\n    // A warp shuffle supplies the partner, avoiding a second input load.\n    cvt.f32.f16 %f0, %h0;\n    shfl.sync.bfly.b32 %f1, %f0, 1, 31, 0xffffffff;\n    cvt.f32.f16 %f2, %h1;\n    cvt.f32.f16 %f3, %h2;\n    setp.eq.u32 %p, %r6, 0;\n    @%p neg.f32 %f1, %f1;\n    mul.f32 %f4, %f1, %f3;\n    fma.rn.f32 %f5, %f0, %f2, %f4;\n\n    // Round to float16 and stream all 128 output features to global memory.\n    cvt.rn.f16.f32 %h3, %f5;\n    st.global.cs.u16 [%rd9], %h3;\n    ret;\n}\n",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

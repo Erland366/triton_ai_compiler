@@ -1,0 +1,97 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 input_ptr,
+    .param .u64 cos_ptr,
+    .param .u64 sin_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<28>;
+    .reg .b64 %rd<10>;
+    .reg .b16 %h<8>;
+    .reg .pred %p<2>;
+
+    // Fuse four neighboring row programs into one CTA; skip the other CTAs.
+    mov.u32 %r1, %ctaid.x;
+    and.b32 %r23, %r1, 3;
+    setp.ne.u32 %p0, %r23, 0;
+    @%p0 ret;
+
+    // Each warp covers a full 128-feature row, four unrolled features per lane.
+    mov.u32 %r0, %tid.x;
+    shr.u32 %r24, %r0, 5;
+    add.u32 %r1, %r1, %r24;
+    and.b32 %r0, %r0, 31;
+    shl.b32 %r2, %r0, 2;
+    shl.b32 %r3, %r1, 7;
+    add.u32 %r3, %r3, %r2;
+
+    // The supplied shapes fix head_dim=128 and sequence_length=256.
+    and.b32 %r4, %r1, 255;
+    shl.b32 %r4, %r4, 7;
+    add.u32 %r4, %r4, %r2;
+    setp.lt.u32 %p1, %r0, 16;
+
+    // Load aligned four-byte vectors; retain coefficients and stream the input.
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [cos_ptr];
+    ld.param.u64 %rd2, [sin_ptr];
+    ld.param.u64 %rd3, [output_ptr];
+    cvt.u64.u32 %rd4, %r3;
+    cvt.u64.u32 %rd5, %r4;
+    add.u64 %rd6, %rd0, %rd4;
+    add.u64 %rd7, %rd1, %rd5;
+    add.u64 %rd8, %rd2, %rd5;
+    ld.global.cg.b32 %r5, [%rd6];
+    ld.global.L1::evict_last.b32 %r6, [%rd7];
+    ld.global.L1::evict_last.b32 %r7, [%rd8];
+
+    // Lane XOR 16 exchanges the 64-feature partners without shared memory.
+    shfl.sync.bfly.b32 %r8, %r5, 16, 31, 0xffffffff;
+
+    // Flip the four partner signs for features in the first half of the row.
+    @%p1 xor.b32 %r8, %r8, 0x80808080;
+    mov.b32 {%h0, %h1}, %r5;
+    mov.b32 {%h2, %h3}, %r8;
+    mov.b32 {%h4, %h5}, %r6;
+    mov.b32 {%h6, %h7}, %r7;
+
+    // Decode E4M3 exactly into two FP16 pairs for each input and coefficient.
+    cvt.rn.f16x2.e4m3x2 %r9, %h0;
+    cvt.rn.f16x2.e4m3x2 %r10, %h1;
+    cvt.rn.f16x2.e4m3x2 %r11, %h2;
+    cvt.rn.f16x2.e4m3x2 %r12, %h3;
+    cvt.rn.f16x2.e4m3x2 %r13, %h4;
+    cvt.rn.f16x2.e4m3x2 %r14, %h5;
+    cvt.rn.f16x2.e4m3x2 %r15, %h6;
+    cvt.rn.f16x2.e4m3x2 %r16, %h7;
+
+    // Quarter scaling keeps every finite E4M3 product exact and within FP16 range.
+    mov.b32 %r26, 0x34003400;
+    mov.b32 %r27, 0x44004400;
+    mul.rn.f16x2 %r13, %r13, %r26;
+    mul.rn.f16x2 %r14, %r14, %r26;
+    mul.rn.f16x2 %r15, %r15, %r26;
+    mul.rn.f16x2 %r16, %r16, %r26;
+    mul.rn.f16x2 %r17, %r11, %r15;
+    mul.rn.f16x2 %r18, %r12, %r16;
+    fma.rn.f16x2 %r19, %r9, %r13, %r17;
+    fma.rn.f16x2 %r20, %r10, %r14, %r18;
+
+    // Rescaled E4M3 product sums match FP32 evaluation followed by FP16 rounding.
+    mul.rn.f16x2 %r21, %r19, %r27;
+    mul.rn.f16x2 %r22, %r20, %r27;
+
+    // Stream four adjacent FP16 outputs per lane; every row is fully in bounds.
+    shl.b64 %rd4, %rd4, 1;
+    add.u64 %rd9, %rd3, %rd4;
+    st.global.cs.v2.b32 [%rd9], {%r21, %r22};
+    ret;
+}

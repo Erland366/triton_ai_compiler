@@ -1,0 +1,28 @@
+{
+  "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i, %a<2>, %o<2>;\n    .reg .b64 %x, %y, %off, %px, %py;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<4>;\n\n    // Map each thread to four consecutive elements of the 1024-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    shl.b32 %i, %b, 10;\n    mad.lo.u32 %i, %t, 4, %i;\n    mul.wide.u32 %off, %i, 2;\n    add.u64 %px, %x, %off;\n    add.u64 %py, %y, %off;\n\n    // Load four aligned half values and promote them to float32.\n    ld.global.v2.b32 {%a0, %a1}, [%px];\n    mov.b32 {%h0, %h1}, %a0;\n    mov.b32 {%h2, %h3}, %a1;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n\n    // Compute exp(-x) using exp2(-x * log2(e)).\n    mul.f32 %f0, %f0, 0fBFB8AA3B;\n    mul.f32 %f1, %f1, 0fBFB8AA3B;\n    mul.f32 %f2, %f2, 0fBFB8AA3B;\n    mul.f32 %f3, %f3, 0fBFB8AA3B;\n    ex2.approx.f32 %f0, %f0;\n    ex2.approx.f32 %f1, %f1;\n    ex2.approx.f32 %f2, %f2;\n    ex2.approx.f32 %f3, %f3;\n\n    // Complete the sigmoid independently for all four elements.\n    add.f32 %f0, %f0, 0f3F800000;\n    add.f32 %f1, %f1, 0f3F800000;\n    add.f32 %f2, %f2, 0f3F800000;\n    add.f32 %f3, %f3, 0f3F800000;\n    rcp.approx.f32 %f0, %f0;\n    rcp.approx.f32 %f1, %f1;\n    rcp.approx.f32 %f2, %f2;\n    rcp.approx.f32 %f3, %f3;\n\n    // Round and pack pairs; the first conversion source occupies the high half.\n    cvt.rn.f16x2.f32 %o0, %f1, %f0;\n    cvt.rn.f16x2.f32 %o1, %f3, %f2;\n\n    // The fixed tile has no masked elements; store all four outputs.\n    st.global.v2.b32 [%py], {%o0, %o1};\n    ret;\n}\n",
+  "num_threads_x": 256,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 1.000089678740398,
+  "p50": 0.00713663985952735,
+  "autotune_metrics": {
+    "operator": "SigmoidFloat16Kernel",
+    "constexpr_values": {},
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.007336545912286197,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.35052500000000003
+}

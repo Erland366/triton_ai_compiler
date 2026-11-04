@@ -1,0 +1,85 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<5>;
+    .reg .b64 %rd<7>;
+    .reg .b16 %h<4>;
+    .reg .f32 %f<24>;
+
+    // Map 128 threads to adjacent pairs covering the full 256-element tile.
+    ld.param.u64 %rd0, [x_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    mad.lo.u32 %r2, %r0, 128, %r1;
+    mul.wide.u32 %rd2, %r2, 4;
+    add.u64 %rd3, %rd0, %rd2;
+    add.u64 %rd4, %rd1, %rd2;
+
+    // Load the unmasked pair and promote both half values to float.
+    ld.global.b32 %r3, [%rd3];
+    mov.b32 {%h0, %h1}, %r3;
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f12, %h1;
+
+    // Evaluate an erf approximation using a reciprocal polynomial and exponential.
+    mul.f32 %f1, %f0, 0f3F3504F3;
+    abs.f32 %f2, %f1;
+    fma.rn.f32 %f3, %f2, 0f3EA7BA05, 0f3F800000;
+    rcp.approx.ftz.f32 %f3, %f3;
+    fma.rn.f32 %f4, %f3, 0f3F87DC22, 0fBFBA00E3;
+    fma.rn.f32 %f4, %f4, %f3, 0f3FB5F0E3;
+    fma.rn.f32 %f4, %f4, %f3, 0fBE91A98E;
+    fma.rn.f32 %f4, %f4, %f3, 0f3E827906;
+    mul.f32 %f4, %f4, %f3;
+    mul.f32 %f5, %f1, %f1;
+    mul.f32 %f5, %f5, 0fBFB8AA3B;
+    ex2.approx.ftz.f32 %f5, %f5;
+    fma.rn.f32 %f6, %f4, %f5, 0fBF800000;
+    neg.f32 %f6, %f6;
+
+    // Restore the erf sign and compute 0.5*x*(1+erf(x/sqrt(2))).
+    copysign.f32 %f6, %f0, %f6;
+    add.f32 %f6, %f6, 0f3F800000;
+    mul.f32 %f7, %f0, 0f3F000000;
+    mul.f32 %f7, %f7, %f6;
+
+    // Evaluate the same erf approximation for the second element.
+    mul.f32 %f13, %f12, 0f3F3504F3;
+    abs.f32 %f14, %f13;
+    fma.rn.f32 %f15, %f14, 0f3EA7BA05, 0f3F800000;
+    rcp.approx.ftz.f32 %f15, %f15;
+    fma.rn.f32 %f16, %f15, 0f3F87DC22, 0fBFBA00E3;
+    fma.rn.f32 %f16, %f16, %f15, 0f3FB5F0E3;
+    fma.rn.f32 %f16, %f16, %f15, 0fBE91A98E;
+    fma.rn.f32 %f16, %f16, %f15, 0f3E827906;
+    mul.f32 %f16, %f16, %f15;
+    mul.f32 %f17, %f13, %f13;
+    mul.f32 %f17, %f17, 0fBFB8AA3B;
+    ex2.approx.ftz.f32 %f17, %f17;
+    fma.rn.f32 %f18, %f16, %f17, 0fBF800000;
+    neg.f32 %f18, %f18;
+
+    // Restore the second erf sign and complete its GELU calculation.
+    copysign.f32 %f18, %f12, %f18;
+    add.f32 %f18, %f18, 0f3F800000;
+    mul.f32 %f19, %f12, 0f3F000000;
+    mul.f32 %f19, %f19, %f18;
+
+    // Round both results to half and store them as one packed word.
+    cvt.rn.f16.f32 %h2, %f7;
+    cvt.rn.f16.f32 %h3, %f19;
+    mov.b32 %r4, {%h2, %h3};
+    st.global.b32 [%rd4], %r4;
+    ret;
+}

@@ -1,0 +1,28 @@
+{
+  "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 gate_ptr,\n    .param .u64 value_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %g,%v,%o,%off;\n    .reg .b32 %t,%b,%i,%gp<4>,%vp<4>,%op<4>;\n    .reg .b16 %h<6>;\n    .reg .f32 %f<6>;\n\n    // Each thread handles eight contiguous elements of its 1024-element tile.\n    ld.param.u64 %g,[gate_ptr];\n    ld.param.u64 %v,[value_ptr];\n    ld.param.u64 %o,[output_ptr];\n    mov.u32 %t,%tid.x;\n    mov.u32 %b,%ctaid.x;\n    shl.b32 %i,%b,11;\n    mad.lo.u32 %i,%t,16,%i;\n    cvt.u64.u32 %off,%i;\n    add.u64 %g,%g,%off;\n    add.u64 %v,%v,%off;\n    add.u64 %o,%o,%off;\n\n    // Load each aligned eight-half vector once; the tile has no masked elements.\n    ld.global.v4.b32 {%gp0,%gp1,%gp2,%gp3},[%g];\n    ld.global.v4.b32 {%vp0,%vp1,%vp2,%vp3},[%v];\n\n    // Convert the first pair and evaluate gate / (1 + exp(-gate)) * value.\n    mov.b32 {%h0,%h1},%gp0;\n    mov.b32 {%h2,%h3},%vp0;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f1,%h1;\n    cvt.f32.f16 %f2,%h2;\n    cvt.f32.f16 %f3,%h3;\n    mul.f32 %f4,%f0,0fBFB8AA3B;\n    mul.f32 %f5,%f1,0fBFB8AA3B;\n    ex2.approx.f32 %f4,%f4;\n    ex2.approx.f32 %f5,%f5;\n    add.f32 %f4,%f4,0f3F800000;\n    add.f32 %f5,%f5,0f3F800000;\n    rcp.approx.f32 %f4,%f4;\n    rcp.approx.f32 %f5,%f5;\n    mul.f32 %f0,%f0,%f4;\n    mul.f32 %f1,%f1,%f5;\n    mul.f32 %f0,%f0,%f2;\n    mul.f32 %f1,%f1,%f3;\n    cvt.rn.f16.f32 %h4,%f0;\n    cvt.rn.f16.f32 %h5,%f1;\n    mov.b32 %op0,{%h4,%h5};\n\n    // Evaluate and pack the second pair using the same float32 arithmetic.\n    mov.b32 {%h0,%h1},%gp1;\n    mov.b32 {%h2,%h3},%vp1;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f1,%h1;\n    cvt.f32.f16 %f2,%h2;\n    cvt.f32.f16 %f3,%h3;\n    mul.f32 %f4,%f0,0fBFB8AA3B;\n    mul.f32 %f5,%f1,0fBFB8AA3B;\n    ex2.approx.f32 %f4,%f4;\n    ex2.approx.f32 %f5,%f5;\n    add.f32 %f4,%f4,0f3F800000;\n    add.f32 %f5,%f5,0f3F800000;\n    rcp.approx.f32 %f4,%f4;\n    rcp.approx.f32 %f5,%f5;\n    mul.f32 %f0,%f0,%f4;\n    mul.f32 %f1,%f1,%f5;\n    mul.f32 %f0,%f0,%f2;\n    mul.f32 %f1,%f1,%f3;\n    cvt.rn.f16.f32 %h4,%f0;\n    cvt.rn.f16.f32 %h5,%f1;\n    mov.b32 %op1,{%h4,%h5};\n\n    // Evaluate and pack the third pair.\n    mov.b32 {%h0,%h1},%gp2;\n    mov.b32 {%h2,%h3},%vp2;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f1,%h1;\n    cvt.f32.f16 %f2,%h2;\n    cvt.f32.f16 %f3,%h3;\n    mul.f32 %f4,%f0,0fBFB8AA3B;\n    mul.f32 %f5,%f1,0fBFB8AA3B;\n    ex2.approx.f32 %f4,%f4;\n    ex2.approx.f32 %f5,%f5;\n    add.f32 %f4,%f4,0f3F800000;\n    add.f32 %f5,%f5,0f3F800000;\n    rcp.approx.f32 %f4,%f4;\n    rcp.approx.f32 %f5,%f5;\n    mul.f32 %f0,%f0,%f4;\n    mul.f32 %f1,%f1,%f5;\n    mul.f32 %f0,%f0,%f2;\n    mul.f32 %f1,%f1,%f3;\n    cvt.rn.f16.f32 %h4,%f0;\n    cvt.rn.f16.f32 %h5,%f1;\n    mov.b32 %op2,{%h4,%h5};\n\n    // Evaluate and pack the fourth pair.\n    mov.b32 {%h0,%h1},%gp3;\n    mov.b32 {%h2,%h3},%vp3;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f1,%h1;\n    cvt.f32.f16 %f2,%h2;\n    cvt.f32.f16 %f3,%h3;\n    mul.f32 %f4,%f0,0fBFB8AA3B;\n    mul.f32 %f5,%f1,0fBFB8AA3B;\n    ex2.approx.f32 %f4,%f4;\n    ex2.approx.f32 %f5,%f5;\n    add.f32 %f4,%f4,0f3F800000;\n    add.f32 %f5,%f5,0f3F800000;\n    rcp.approx.f32 %f4,%f4;\n    rcp.approx.f32 %f5,%f5;\n    mul.f32 %f0,%f0,%f4;\n    mul.f32 %f1,%f1,%f5;\n    mul.f32 %f0,%f0,%f2;\n    mul.f32 %f1,%f1,%f3;\n    cvt.rn.f16.f32 %h4,%f0;\n    cvt.rn.f16.f32 %h5,%f1;\n    mov.b32 %op3,{%h4,%h5};\n\n    // Store all eight rounded half results in one aligned vector operation.\n    st.global.v4.b32 [%o],{%op0,%op1,%op2,%op3};\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [],
+  "speedup": 1.0017932461278871,
+  "p50": 0.008208640106022357,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat16Kernel",
+    "constexpr_values": {},
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.008083614814080353,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.416921
+}

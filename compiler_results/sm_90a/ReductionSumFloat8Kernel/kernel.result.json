@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_PJ8zgGQLVoTjytBlhnM6Tdq8",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.00852223986759782,
+    "triton_p50": 0.008789760023355485,
+    "triton_p80": 0.008989951703697444,
+    "triton_p90": 0.009072000160813332,
+    "triton_p95": 0.00918700810521841,
+    "triton_p99": 0.009343187278322874,
+    "p20": 0.007755391914397478,
+    "p50": 0.00805951990187168,
+    "p80": 0.008246399611234665,
+    "p90": 0.008366079796105623,
+    "p95": 0.008430719934403896,
+    "p99": 0.008601184205152095,
+    "speedup_vs_triton": 1.0906059083388104,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 3.0458320000000003,
+  "autotune_metrics": {
+    "operator": "ReductionSumFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 4
+      },
+      "latency_ms": 0.008737208369710823,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0906059083388104,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %x, %out, %addr;\n    .reg .b32 %t, %bx, %by, %index, %lane, %warp, %sm, %sp;\n    .reg .b32 %a<4>, %scale;\n    .reg .s32 %isum, %itotal;\n    .reg .f32 %d<4>, %zero, %sum;\n    .reg .pred %leader, %other, %hasnan, %warpnan;\n\n    // The 128 aligned 16-byte loads cover this batch's entire 2048-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %out, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %bx, %ctaid.x;\n    mov.u32 %by, %ctaid.y;\n    mad.lo.u32 %index, %by, 2, %bx;\n    mad.lo.u32 %index, %index, 128, %t;\n    mad.wide.u32 %addr, %index, 16, %x;\n    ld.global.v4.u32 {%a0, %a1, %a2, %a3}, [%addr];\n\n    // Multiplication by E5M2 512 makes every finite E4M3 input an exact integer.\n    mov.b32 %scale, 0x60606060;\n    mov.f32 %zero, 0f00000000;\n    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e5m2.f32 {%d0, %d1, %d2, %d3}, {%a0, %a1, %a2, %a3}, {%scale, %scale}, {%zero, %zero, %zero, %zero};\n\n    // Each lane holds two row sums; their finite scaled sum fits exactly in FP32.\n    add.f32 %sum, %d0, %d2;\n    setp.nan.f32 %hasnan, %sum, %sum;\n    vote.sync.any.pred %warpnan, %hasnan, 0xffffffff;\n    cvt.rzi.s32.f32 %isum, %sum;\n\n    // Hardware integer reduction includes four identical columns and cannot overflow.\n    redux.sync.add.s32 %itotal, %isum, 0xffffffff;\n    cvt.rn.f32.s32 %sum, %itotal;\n    mul.f32 %sum, %sum, 0f3a000000;\n    selp.f32 %sum, 0f7fc00000, %sum, %warpnan;\n\n    // Share the four warp sums through 16 bytes of dynamic shared memory.\n    and.b32 %lane, %t, 31;\n    shr.u32 %warp, %t, 5;\n    mov.u32 %sm, global_smem;\n    mad.lo.u32 %sp, %warp, 4, %sm;\n    setp.eq.u32 %leader, %lane, 0;\n    @%leader st.shared.f32 [%sp], %sum;\n    bar.sync 0;\n    setp.ne.u32 %other, %t, 0;\n    @%other bra DONE;\n\n    // Combine the warp sums and issue one FP32 atomic add for this tile.\n    ld.shared.v4.f32 {%d0, %d1, %d2, %d3}, [%sm];\n    add.f32 %d0, %d0, %d1;\n    add.f32 %d2, %d2, %d3;\n    add.f32 %sum, %d0, %d2;\n    mad.wide.u32 %addr, %by, 4, %out;\n    red.relaxed.gpu.global.add.f32 [%addr], %sum;\nDONE:\n    ret;\n}\n",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

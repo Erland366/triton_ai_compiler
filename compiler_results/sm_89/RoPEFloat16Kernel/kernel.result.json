@@ -1,0 +1,33 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 input_ptr,\n    .param .u64 cos_ptr,\n    .param .u64 sin_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %row, %t, %half, %feature, %offset, %rope_offset, %sign;\n    .reg .b64 %input, %cos, %sin, %output, %a, %c, %s, %o;\n    .reg .b16 %hv, %hc, %hs, %ho;\n    .reg .f32 %v, %p, %cv, %sv, %term, %result;\n\n    // Adjacent lanes own paired features in opposite 64-element halves.\n    ld.param.u64 %input, [input_ptr];\n    ld.param.u64 %cos, [cos_ptr];\n    ld.param.u64 %sin, [sin_ptr];\n    ld.param.u64 %output, [output_ptr];\n    mov.u32 %row, %ctaid.x;\n    mov.u32 %t, %tid.x;\n    shl.b32 %sign, %t, 31;\n    and.b32 %half, %t, 1;\n    shr.u32 %feature, %t, 1;\n    mad.lo.u32 %feature, %half, 64, %feature;\n    shl.b32 %offset, %row, 7;\n    add.u32 %offset, %offset, %feature;\n    mad.wide.u32 %a, %offset, 2, %input;\n    mad.wide.u32 %o, %offset, 2, %output;\n\n    // Cache the repeated 256-row tables without allocating input data in L1.\n    and.b32 %rope_offset, %offset, 32767;\n    mad.wide.u32 %c, %rope_offset, 2, %cos;\n    mad.wide.u32 %s, %rope_offset, 2, %sin;\n    ld.global.nc.L1::no_allocate.b16 %hv, [%a];\n    ld.global.nc.L1::evict_last.b16 %hc, [%c];\n    ld.global.nc.L1::evict_last.b16 %hs, [%s];\n\n    // Flip the sine sign for first-half features before using the paired input.\n    cvt.f32.f16 %cv, %hc;\n    cvt.f32.f16 %sv, %hs;\n    lop3.b32 %sv, %sv, %sign, 0x80000000, 0x96;\n\n    // Shuffle adjacent lanes to avoid loading the paired input a second time.\n    cvt.f32.f16 %v, %hv;\n    shfl.sync.bfly.b32 %p, %v, 1, 31, 0xffffffff;\n\n    // Preserve float32 arithmetic and round each valid output to half.\n    mul.rn.f32 %term, %p, %sv;\n    fma.rn.f32 %result, %v, %cv, %term;\n    cvt.rn.f16.f32 %ho, %result;\n    st.global.cs.b16 [%o], %ho;\n    ret;\n}\n",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "The verifier supplies zero bytes of dynamic shared memory.",
+    "ptxas rejected %tid.x when %tid was also declared as a local register."
+  ],
+  "speedup": 1.0155367735460825,
+  "p50": 3.1059373116493223,
+  "autotune_metrics": {
+    "operator": "RoPEFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 128
+    },
+    "selected_config": {
+      "block_size": 128,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 128,
+        "num_warps": 4
+      },
+      "latency_ms": 3.1564863681793214,
+      "evaluated_configurations": 3,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 3.2391135
+}

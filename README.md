@@ -125,6 +125,44 @@ On OpenRouter, pick a model that supports both `tools` and `response_format`
 (see the [model catalog](https://openrouter.ai/models)); `qwen/qwen3-coder`,
 `deepseek/deepseek-v3.2`, and `meta-llama/llama-3.3-70b-instruct` work well.
 
+## Quick run
+
+Run the example matching your GPU from the repository root. Each requires
+CUDA tooling that supports its target and the patched Triton/PTX Gym
+installation above.
+
+```bash
+export PTX_MEMORY_SANITIZER="$(command -v compute-sanitizer)"
+export NCU_PATH="$(command -v ncu)"
+```
+
+**NVIDIA B200 (Blackwell, `sm_100a`)**
+
+```bash
+python -m remeasure_candidate \
+  compiler_results/sm_100a/Convolution2DFloat8Kernel/kernel_1.result.json \
+  --kernel Convolution2DFloat8Kernel \
+  --output output/sm_100a/Convolution2DFloat8Kernel_1.json
+```
+
+**NVIDIA H100 (`sm_90a`)**
+
+```bash
+python -m remeasure_candidate \
+  compiler_results/sm_90a/Convolution2DFloat8Kernel/kernel.result.json \
+  --kernel Convolution2DFloat8Kernel \
+  --output output/sm_90a/Convolution2DFloat8Kernel.json
+```
+
+**NVIDIA L40S (`sm_89`)**
+
+```bash
+python -m remeasure_candidate \
+  compiler_results/sm_89/Convolution2DFloat8Kernel/kernel.result.json \
+  --kernel Convolution2DFloat8Kernel \
+  --output output/sm_89/Convolution2DFloat8Kernel.json
+```
+
 ## Agent options
 
 ### Starting point

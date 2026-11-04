@@ -1,0 +1,49 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %t, %b, %i;
+    .reg .b64 %x, %y, %off, %a, %o;
+    .reg .b16 %h<4>;
+    .reg .f32 %f<6>;
+
+    // Each thread processes two adjacent halves in its 512-element tile.
+    ld.param.u64 %x, [x_ptr];
+    ld.param.u64 %y, [output_ptr];
+    mov.u32 %t, %tid.x;
+    mov.u32 %b, %ctaid.x;
+    mad.lo.u32 %i, %b, 256, %t;
+    mul.wide.u32 %off, %i, 4;
+    add.u64 %a, %x, %off;
+    add.u64 %o, %y, %off;
+
+    // Load both halves and promote to single precision.
+    ld.global.v2.b16 {%h0, %h1}, [%a];
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+
+    // Evaluate sigmoid using -log2(e), base-two exponential, and reciprocal.
+    mul.f32 %f0, %f0, 0fBFB8AA3B;
+    mul.f32 %f1, %f1, 0fBFB8AA3B;
+    ex2.approx.f32 %f2, %f0;
+    ex2.approx.f32 %f3, %f1;
+    add.f32 %f2, %f2, 0f3F800000;
+    add.f32 %f3, %f3, 0f3F800000;
+    rcp.approx.f32 %f4, %f2;
+    rcp.approx.f32 %f5, %f3;
+
+    // Round to half precision and write both outputs without masking.
+    cvt.rn.f16.f32 %h2, %f4;
+    cvt.rn.f16.f32 %h3, %f5;
+    st.global.v2.b16 [%o], {%h2, %h3};
+    ret;
+}

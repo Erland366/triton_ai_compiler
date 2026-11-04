@@ -1,0 +1,57 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_EEBbzZnGEU65nyIHJtuJDOf9",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007436800124123693,
+    "triton_p50": 0.00762879996560514,
+    "triton_p80": 0.007793279951438308,
+    "triton_p90": 0.007863872256129981,
+    "triton_p95": 0.007920639850199222,
+    "triton_p99": 0.008092473734170198,
+    "p20": 0.007359616057947278,
+    "p50": 0.0075532800145447256,
+    "p80": 0.007744639981538058,
+    "p90": 0.007833600044250488,
+    "p95": 0.007886687909252942,
+    "p99": 0.008053171075507999,
+    "speedup_vs_triton": 1.0099982988734684,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.36567399999999994,
+  "autotune_metrics": {
+    "operator": "GELUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 4
+      },
+      "latency_ms": 0.007218634081692425,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0099982988734684,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 x_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n){\n.reg .b64 %xp,%op,%off,%xa,%oa;\n.reg .b32 %lane,%pid,%idx,%v0,%v1;\n.reg .b16 %h<4>;\n.reg .f32 %x<4>,%a<4>,%t<4>,%p<4>,%e<4>,%s<4>,%y<4>;\n.reg .pred %neg<4>;\n// Each of 128 threads handles four consecutive halves in its 512-element CTA tile.\nld.param.u64 %xp,[x_ptr];\nld.param.u64 %op,[output_ptr];\nmov.u32 %lane,%tid.x;\nmov.u32 %pid,%ctaid.x;\nshl.b32 %idx,%lane,2;\nmad.lo.u32 %idx,%pid,512,%idx;\nmul.wide.u32 %off,%idx,2;\nadd.u64 %xa,%xp,%off;\nadd.u64 %oa,%op,%off;\n// Load eight aligned bytes and unpack four half values.\nld.global.v2.b32 {%v0,%v1},[%xa];\nmov.b32 {%h0,%h1},%v0;\nmov.b32 {%h2,%h3},%v1;\ncvt.f32.f16 %x0,%h0;\ncvt.f32.f16 %x1,%h1;\ncvt.f32.f16 %x2,%h2;\ncvt.f32.f16 %x3,%h3;\n// Evaluate the erf approximation for the first value.\nmul.f32 %s0,%x0,0.7071067811865476;\nabs.f32 %a0,%s0;\nfma.rn.f32 %t0,%a0,0.3275911,1.0;\nrcp.approx.f32 %t0,%t0;\nfma.rn.f32 %p0,%t0,1.061405429,-1.453152027;\nfma.rn.f32 %p0,%p0,%t0,1.421413741;\nfma.rn.f32 %p0,%p0,%t0,-0.284496736;\nfma.rn.f32 %p0,%p0,%t0,0.254829592;\nmul.f32 %p0,%p0,%t0;\nmul.f32 %e0,%a0,%a0;\nmul.f32 %e0,%e0,-1.4426950408889634;\nex2.approx.f32 %e0,%e0;\nfma.rn.f32 %e0,%p0,%e0,-1.0;\nsetp.lt.f32 %neg0,%x0,0.0;\nneg.f32 %s0,%e0;\nselp.f32 %e0,%e0,%s0,%neg0;\nadd.f32 %e0,%e0,1.0;\nmul.f32 %y0,%x0,0.5;\nmul.f32 %y0,%y0,%e0;\ncvt.rn.f16.f32 %h0,%y0;\n// Evaluate the same float32 GELU for the second value.\nmul.f32 %s1,%x1,0.7071067811865476;\nabs.f32 %a1,%s1;\nfma.rn.f32 %t1,%a1,0.3275911,1.0;\nrcp.approx.f32 %t1,%t1;\nfma.rn.f32 %p1,%t1,1.061405429,-1.453152027;\nfma.rn.f32 %p1,%p1,%t1,1.421413741;\nfma.rn.f32 %p1,%p1,%t1,-0.284496736;\nfma.rn.f32 %p1,%p1,%t1,0.254829592;\nmul.f32 %p1,%p1,%t1;\nmul.f32 %e1,%a1,%a1;\nmul.f32 %e1,%e1,-1.4426950408889634;\nex2.approx.f32 %e1,%e1;\nfma.rn.f32 %e1,%p1,%e1,-1.0;\nsetp.lt.f32 %neg1,%x1,0.0;\nneg.f32 %s1,%e1;\nselp.f32 %e1,%e1,%s1,%neg1;\nadd.f32 %e1,%e1,1.0;\nmul.f32 %y1,%x1,0.5;\nmul.f32 %y1,%y1,%e1;\ncvt.rn.f16.f32 %h1,%y1;\n// Evaluate the same float32 GELU for the third value.\nmul.f32 %s2,%x2,0.7071067811865476;\nabs.f32 %a2,%s2;\nfma.rn.f32 %t2,%a2,0.3275911,1.0;\nrcp.approx.f32 %t2,%t2;\nfma.rn.f32 %p2,%t2,1.061405429,-1.453152027;\nfma.rn.f32 %p2,%p2,%t2,1.421413741;\nfma.rn.f32 %p2,%p2,%t2,-0.284496736;\nfma.rn.f32 %p2,%p2,%t2,0.254829592;\nmul.f32 %p2,%p2,%t2;\nmul.f32 %e2,%a2,%a2;\nmul.f32 %e2,%e2,-1.4426950408889634;\nex2.approx.f32 %e2,%e2;\nfma.rn.f32 %e2,%p2,%e2,-1.0;\nsetp.lt.f32 %neg2,%x2,0.0;\nneg.f32 %s2,%e2;\nselp.f32 %e2,%e2,%s2,%neg2;\nadd.f32 %e2,%e2,1.0;\nmul.f32 %y2,%x2,0.5;\nmul.f32 %y2,%y2,%e2;\ncvt.rn.f16.f32 %h2,%y2;\n// Evaluate the same float32 GELU for the fourth value.\nmul.f32 %s3,%x3,0.7071067811865476;\nabs.f32 %a3,%s3;\nfma.rn.f32 %t3,%a3,0.3275911,1.0;\nrcp.approx.f32 %t3,%t3;\nfma.rn.f32 %p3,%t3,1.061405429,-1.453152027;\nfma.rn.f32 %p3,%p3,%t3,1.421413741;\nfma.rn.f32 %p3,%p3,%t3,-0.284496736;\nfma.rn.f32 %p3,%p3,%t3,0.254829592;\nmul.f32 %p3,%p3,%t3;\nmul.f32 %e3,%a3,%a3;\nmul.f32 %e3,%e3,-1.4426950408889634;\nex2.approx.f32 %e3,%e3;\nfma.rn.f32 %e3,%p3,%e3,-1.0;\nsetp.lt.f32 %neg3,%x3,0.0;\nneg.f32 %s3,%e3;\nselp.f32 %e3,%e3,%s3,%neg3;\nadd.f32 %e3,%e3,1.0;\nmul.f32 %y3,%x3,0.5;\nmul.f32 %y3,%y3,%e3;\ncvt.rn.f16.f32 %h3,%y3;\n// Pack and store the complete tile without masks, matching the source kernel.\nmov.b32 %v0,{%h0,%h1};\nmov.b32 %v1,{%h2,%h3};\nst.global.v2.b32 [%oa],{%v0,%v1};\nret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

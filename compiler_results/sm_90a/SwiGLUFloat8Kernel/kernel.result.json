@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_AtbCHj4ZScrMRYKXTx0t7MgD",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.006666880035772919,
+    "triton_p50": 0.006823039995506406,
+    "triton_p80": 0.0069868798926472665,
+    "triton_p90": 0.007089279945939779,
+    "triton_p95": 0.007196576004847884,
+    "triton_p99": 0.007855833614896982,
+    "p20": 0.006624640030786395,
+    "p50": 0.006792000117711723,
+    "p80": 0.006965119931846857,
+    "p90": 0.007075199922546745,
+    "p95": 0.0071891200076788665,
+    "p99": 0.007814099172037094,
+    "speedup_vs_triton": 1.0045700643781998,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.16069,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 16
+      },
+      "latency_ms": 0.006765070619556787,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0045700643781998,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 gate_ptr,\n.param .u64 value_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n){\n.reg .b32 %r<14>;\n.reg .b64 %p<8>;\n.reg .b16 %h<12>;\n.reg .f32 %g<4>, %v<4>, %e<4>;\n// Each thread handles four contiguous elements of the 2048-element tile.\nld.param.u64 %p0,[gate_ptr];\nld.param.u64 %p1,[value_ptr];\nld.param.u64 %p2,[output_ptr];\nmov.u32 %r0,%ctaid.x;\nmov.u32 %r1,%tid.x;\nshl.b32 %r0,%r0,11;\nshl.b32 %r1,%r1,2;\nadd.u32 %r2,%r0,%r1;\ncvt.u64.u32 %p3,%r2;\nadd.u64 %p4,%p0,%p3;\nadd.u64 %p5,%p1,%p3;\nshl.b64 %p3,%p3,1;\nadd.u64 %p6,%p2,%p3;\n// Load packed FP8 inputs and convert pairs exactly to FP16.\nld.global.u32 %r3,[%p4];\nld.global.u32 %r4,[%p5];\nmov.b32 {%h0,%h1},%r3;\nmov.b32 {%h2,%h3},%r4;\ncvt.rn.f16x2.e4m3x2 %r5,%h0;\ncvt.rn.f16x2.e4m3x2 %r6,%h1;\ncvt.rn.f16x2.e4m3x2 %r7,%h2;\ncvt.rn.f16x2.e4m3x2 %r8,%h3;\nmov.b32 {%h4,%h5},%r5;\nmov.b32 {%h6,%h7},%r6;\nmov.b32 {%h8,%h9},%r7;\nmov.b32 {%h10,%h11},%r8;\n// Promote to FP32 before evaluating the activation.\ncvt.f32.f16 %g0,%h4;\ncvt.f32.f16 %g1,%h5;\ncvt.f32.f16 %g2,%h6;\ncvt.f32.f16 %g3,%h7;\ncvt.f32.f16 %v0,%h8;\ncvt.f32.f16 %v1,%h9;\ncvt.f32.f16 %v2,%h10;\ncvt.f32.f16 %v3,%h11;\n// exp(-gate) uses base-two exponentiation with -log2(e).\nmul.f32 %e0,%g0,0fBFB8AA3B;\nmul.f32 %e1,%g1,0fBFB8AA3B;\nmul.f32 %e2,%g2,0fBFB8AA3B;\nmul.f32 %e3,%g3,0fBFB8AA3B;\nex2.approx.f32 %e0,%e0;\nex2.approx.f32 %e1,%e1;\nex2.approx.f32 %e2,%e2;\nex2.approx.f32 %e3,%e3;\nadd.f32 %e0,%e0,0f3F800000;\nadd.f32 %e1,%e1,0f3F800000;\nadd.f32 %e2,%e2,0f3F800000;\nadd.f32 %e3,%e3,0f3F800000;\nrcp.approx.f32 %e0,%e0;\nrcp.approx.f32 %e1,%e1;\nrcp.approx.f32 %e2,%e2;\nrcp.approx.f32 %e3,%e3;\n// Preserve the FP32 multiplication order, then round once to FP16.\nmul.f32 %g0,%g0,%e0;\nmul.f32 %g1,%g1,%e1;\nmul.f32 %g2,%g2,%e2;\nmul.f32 %g3,%g3,%e3;\nmul.f32 %g0,%g0,%v0;\nmul.f32 %g1,%g1,%v1;\nmul.f32 %g2,%g2,%v2;\nmul.f32 %g3,%g3,%v3;\ncvt.rn.f16x2.f32 %r9,%g1,%g0;\ncvt.rn.f16x2.f32 %r10,%g3,%g2;\n// All tile elements are valid; write four contiguous FP16 results.\nst.global.v2.u32 [%p6],{%r9,%r10};\nret;\n}",
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

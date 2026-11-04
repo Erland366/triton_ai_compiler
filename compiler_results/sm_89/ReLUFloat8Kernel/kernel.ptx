@@ -1,0 +1,41 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %x, %y, %a, %b, %off;
+    .reg .b32 %lane, %pid, %i, %v, %r0, %r1;
+    .reg .b16 %h0, %h1;
+
+    // Each of the 128 threads owns four adjacent elements of its complete tile.
+    ld.param.u64 %x, [x_ptr];
+    ld.param.u64 %y, [output_ptr];
+    mov.u32 %lane, %tid.x;
+    mov.u32 %pid, %ctaid.x;
+    shl.b32 %i, %lane, 2;
+    mad.lo.u32 %i, %pid, 512, %i;
+    cvt.u64.u32 %off, %i;
+    add.u64 %a, %x, %off;
+    shl.b64 %off, %off, 1;
+    add.u64 %b, %y, %off;
+
+    // Load four contiguous FP8 elements with no boundary mask, as in the source.
+    ld.global.b32 %v, [%a];
+    mov.b32 {%h0, %h1}, %v;
+
+    // Convert pairs to half precision while clamping negatives and preserving NaNs.
+    cvt.rn.relu.f16x2.e4m3x2 %r0, %h0;
+    cvt.rn.relu.f16x2.e4m3x2 %r1, %h1;
+
+    // Store four contiguous half-precision results in one vector store.
+    st.global.v2.b32 [%b], {%r0, %r1};
+    ret;
+}

@@ -1,0 +1,201 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 tid, row, off, lane, warp, sm, sw, sr;
+    .reg .b64 xp, wp, op, byteoff;
+    .reg .b32 raw<8>, wr<8>, out<8>;
+    .reg .b16 h0, h1;
+    .reg .f32 x<16>, a<4>, sum, t, inv, w0, w1, y0, y1;
+    .reg .pred leader;
+
+    // Each CTA owns one row; each warp owns 512 consecutive elements.
+    ld.param.u64 xp, [x_ptr];
+    ld.param.u64 wp, [weight_ptr];
+    ld.param.u64 op, [output_ptr];
+    mov.u32 tid, %tid.x;
+    mov.u32 row, %ctaid.x;
+    shl.b32 row, row, 13;
+    shl.b32 off, tid, 4;
+    and.b32 sw, off, 3584;
+    add.u32 off, off, sw;
+    add.u32 off, row, off;
+    cvt.u64.u32 byteoff, off;
+    add.u64 xp, xp, byteoff;
+    add.u64 wp, wp, byteoff;
+    add.u64 op, op, byteoff;
+
+    // Load two coalesced eight-element vectors per thread with an L2 prefetch hint.
+    ld.global.L2::256B.v4.b32 {raw0, raw1, raw2, raw3}, [xp];
+    ld.global.L2::256B.v4.b32 {raw4, raw5, raw6, raw7}, [xp+512];
+
+    // Expand all sixteen half inputs and retain their FP32 values for the output.
+    mov.b32 {h0, h1}, raw0;
+    cvt.f32.f16 x0, h0;
+    cvt.f32.f16 x1, h1;
+    mov.b32 {h0, h1}, raw1;
+    cvt.f32.f16 x2, h0;
+    cvt.f32.f16 x3, h1;
+    mov.b32 {h0, h1}, raw2;
+    cvt.f32.f16 x4, h0;
+    cvt.f32.f16 x5, h1;
+    mov.b32 {h0, h1}, raw3;
+    cvt.f32.f16 x6, h0;
+    cvt.f32.f16 x7, h1;
+    mov.b32 {h0, h1}, raw4;
+    cvt.f32.f16 x8, h0;
+    cvt.f32.f16 x9, h1;
+    mov.b32 {h0, h1}, raw5;
+    cvt.f32.f16 x10, h0;
+    cvt.f32.f16 x11, h1;
+    mov.b32 {h0, h1}, raw6;
+    cvt.f32.f16 x12, h0;
+    cvt.f32.f16 x13, h1;
+    mov.b32 {h0, h1}, raw7;
+    cvt.f32.f16 x14, h0;
+    cvt.f32.f16 x15, h1;
+
+    // Four independent FP32 accumulators sum each thread's squared inputs.
+    mul.f32 a0, x0, x0;
+    mul.f32 a1, x1, x1;
+    mul.f32 a2, x2, x2;
+    mul.f32 a3, x3, x3;
+    fma.rn.f32 a0, x4, x4, a0;
+    fma.rn.f32 a1, x5, x5, a1;
+    fma.rn.f32 a2, x6, x6, a2;
+    fma.rn.f32 a3, x7, x7, a3;
+    fma.rn.f32 a0, x8, x8, a0;
+    fma.rn.f32 a1, x9, x9, a1;
+    fma.rn.f32 a2, x10, x10, a2;
+    fma.rn.f32 a3, x11, x11, a3;
+    fma.rn.f32 a0, x12, x12, a0;
+    fma.rn.f32 a1, x13, x13, a1;
+    fma.rn.f32 a2, x14, x14, a2;
+    fma.rn.f32 a3, x15, x15, a3;
+    add.f32 a0, a0, a2;
+    add.f32 a1, a1, a3;
+    add.f32 sum, a0, a1;
+
+    // Reduce all 32 lanes to obtain each warp's squared sum.
+    shfl.sync.bfly.b32 t, sum, 16, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 8, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 4, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 2, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 1, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+
+    // Publish eight warp sums using exactly shared bytes 0 through 31.
+    and.b32 lane, tid, 31;
+    shr.u32 warp, tid, 5;
+    mov.u32 sm, global_smem;
+    shl.b32 sw, warp, 2;
+    add.u32 sw, sm, sw;
+    setp.eq.u32 leader, lane, 0;
+    @leader st.shared.f32 [sw], sum;
+    bar.sync 0;
+
+    // Replicate the eight shared sums across lane groups and finish the row sum.
+    and.b32 sr, lane, 7;
+    shl.b32 sr, sr, 2;
+    add.u32 sr, sm, sr;
+    ld.shared.f32 sum, [sr];
+    shfl.sync.bfly.b32 t, sum, 4, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 2, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+    shfl.sync.bfly.b32 t, sum, 1, 31, 0xffffffff;
+    add.f32 sum, sum, t;
+
+    // Compute rsqrt(sum / 4096 + 1e-6) in FP32.
+    fma.rn.f32 inv, sum, 0f39800000, 0f358637bd;
+    rsqrt.approx.f32 inv, inv;
+
+    // Load the corresponding per-row weights with coalesced vector accesses.
+    ld.global.L2::256B.v4.b32 {wr0, wr1, wr2, wr3}, [wp];
+    ld.global.L2::256B.v4.b32 {wr4, wr5, wr6, wr7}, [wp+512];
+
+    // Preserve (x * inverse_rms) * weight and pack round-to-nearest half pairs.
+    mov.b32 {h0, h1}, wr0;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x0, inv;
+    mul.f32 y1, x1, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out0, y1, y0;
+    mov.b32 {h0, h1}, wr1;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x2, inv;
+    mul.f32 y1, x3, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out1, y1, y0;
+    mov.b32 {h0, h1}, wr2;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x4, inv;
+    mul.f32 y1, x5, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out2, y1, y0;
+    mov.b32 {h0, h1}, wr3;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x6, inv;
+    mul.f32 y1, x7, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out3, y1, y0;
+    mov.b32 {h0, h1}, wr4;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x8, inv;
+    mul.f32 y1, x9, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out4, y1, y0;
+    mov.b32 {h0, h1}, wr5;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x10, inv;
+    mul.f32 y1, x11, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out5, y1, y0;
+    mov.b32 {h0, h1}, wr6;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x12, inv;
+    mul.f32 y1, x13, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out6, y1, y0;
+    mov.b32 {h0, h1}, wr7;
+    cvt.f32.f16 w0, h0;
+    cvt.f32.f16 w1, h1;
+    mul.f32 y0, x14, inv;
+    mul.f32 y1, x15, inv;
+    mul.f32 y0, y0, w0;
+    mul.f32 y1, y1, w1;
+    cvt.rn.f16x2.f32 out7, y1, y0;
+
+    // Store all 4096 outputs exactly once; the complete row needs no masks.
+    st.global.v4.b32 [op], {out0, out1, out2, out3};
+    st.global.v4.b32 [op+512], {out4, out5, out6, out7};
+    ret;
+}

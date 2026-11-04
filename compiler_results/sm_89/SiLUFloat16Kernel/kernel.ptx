@@ -1,0 +1,53 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<4>;
+    .reg .b64 %rd<6>;
+    .reg .b16 %h<4>;
+    .reg .f32 %f<12>;
+
+    // Each thread handles two adjacent halves, covering the full 512-element tile.
+    ld.param.u64 %rd0, [x_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    mad.lo.u32 %r2, %r0, 256, %r1;
+    mul.wide.u32 %rd2, %r2, 4;
+    add.u64 %rd3, %rd0, %rd2;
+    add.u64 %rd4, %rd1, %rd2;
+
+    // Load both elements without masks and promote to float32.
+    ld.global.v2.b16 {%h0, %h1}, [%rd3];
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+
+    // Compute exp(-x) as exp2(-x * log2(e)).
+    mul.f32 %f2, %f0, 0fBFB8AA3B;
+    mul.f32 %f3, %f1, 0fBFB8AA3B;
+    ex2.approx.f32 %f4, %f2;
+    ex2.approx.f32 %f5, %f3;
+    add.f32 %f6, %f4, 0f3F800000;
+    add.f32 %f7, %f5, 0f3F800000;
+
+    // Compute x / (1 + exp(-x)) independently for both elements.
+    rcp.approx.f32 %f8, %f6;
+    rcp.approx.f32 %f9, %f7;
+    mul.f32 %f10, %f0, %f8;
+    mul.f32 %f11, %f1, %f9;
+
+    // Round to half precision and store the adjacent pair.
+    cvt.rn.f16.f32 %h2, %f10;
+    cvt.rn.f16.f32 %h3, %f11;
+    st.global.v2.b16 [%rd4], {%h2, %h3};
+    ret;
+}

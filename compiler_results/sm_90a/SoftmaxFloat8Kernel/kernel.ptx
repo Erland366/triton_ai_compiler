@@ -1,0 +1,226 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 output_ptr,
+    .param .u64 input_ptr,
+    .param .u32 input_row_stride,
+    .param .u32 output_row_stride,
+    .param .u32 n_rows,
+    .param .u32 n_cols,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %pRow, %pLoop;
+    .reg .b32 %r<12>, %raw<4>, %v<8>, %out<8>;
+    .reg .b16 %b<8>, %h<16>, %ha, %hb;
+    .reg .b64 %rd<10>;
+    .reg .f32 %f<16>, %s<8>, %m, %t, %inv;
+
+    // Pack 8 independent rows into a CTA, using 16 lanes per row.
+    ld.param.u32 %r0, [n_rows];
+    mov.u32 %r1, %ctaid.x;
+    shl.b32 %r1, %r1, 3;
+    setp.ge.u32 %pLoop, %r1, %r0;
+    @%pLoop bra.uni DONE;
+    mov.u32 %r2, %tid.x;
+    shr.u32 %r3, %r2, 4;
+    add.u32 %r3, %r1, %r3;
+    and.b32 %r2, %r2, 15;
+    shl.b32 %r4, %r2, 3;
+    shl.b32 %r5, %r2, 4;
+    mov.u32 %r6, %nctaid.x;
+    shl.b32 %r6, %r6, 3;
+    ld.param.u32 %r7, [input_row_stride];
+    ld.param.u32 %r8, [output_row_stride];
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+
+    // Each lane reads eight-column vectors, spaced across the complete 256-column row.
+    mad.wide.u32 %rd2, %r3, %r7, %rd0;
+    cvt.u64.u32 %rd4, %r4;
+    add.u64 %rd2, %rd2, %rd4;
+    mul.wide.u32 %rd3, %r3, %r8;
+    shl.b64 %rd3, %rd3, 1;
+    add.u64 %rd3, %rd3, %rd1;
+    cvt.u64.u32 %rd5, %r5;
+    add.u64 %rd3, %rd3, %rd5;
+    mul.wide.u32 %rd6, %r6, %r7;
+    mul.wide.u32 %rd7, %r6, %r8;
+    shl.b64 %rd7, %rd7, 1;
+
+    // Initialize inactive-row registers; only valid rows access global memory.
+    mov.b32 %raw0, 0;
+    mov.b32 %raw1, 0;
+    mov.b32 %raw2, 0;
+    mov.b32 %raw3, 0;
+
+ROW_LOOP:
+    // Guard rows only: the Triton kernel always accesses all 256 columns.
+    setp.lt.u32 %pRow, %r3, %r0;
+    @%pRow ld.global.v2.b32 {%raw0, %raw1}, [%rd2+0];
+    @%pRow ld.global.v2.b32 {%raw2, %raw3}, [%rd2+128];
+
+    // Decode packed E4M3 values exactly through native FP16 conversion.
+    mov.b32 {%b0, %b1}, %raw0;
+    mov.b32 {%b2, %b3}, %raw1;
+    mov.b32 {%b4, %b5}, %raw2;
+    mov.b32 {%b6, %b7}, %raw3;
+    cvt.rn.f16x2.e4m3x2 %v0, %b0;
+    mov.b32 {%h0, %h1}, %v0;
+    cvt.rn.f16x2.e4m3x2 %v1, %b1;
+    mov.b32 {%h2, %h3}, %v1;
+    cvt.rn.f16x2.e4m3x2 %v2, %b2;
+    mov.b32 {%h4, %h5}, %v2;
+    cvt.rn.f16x2.e4m3x2 %v3, %b3;
+    mov.b32 {%h6, %h7}, %v3;
+    cvt.rn.f16x2.e4m3x2 %v4, %b4;
+    mov.b32 {%h8, %h9}, %v4;
+    cvt.rn.f16x2.e4m3x2 %v5, %b5;
+    mov.b32 {%h10, %h11}, %v5;
+    cvt.rn.f16x2.e4m3x2 %v6, %b6;
+    mov.b32 {%h12, %h13}, %v6;
+    cvt.rn.f16x2.e4m3x2 %v7, %b7;
+    mov.b32 {%h14, %h15}, %v7;
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+    cvt.f32.f16 %f2, %h2;
+    cvt.f32.f16 %f3, %h3;
+    cvt.f32.f16 %f4, %h4;
+    cvt.f32.f16 %f5, %h5;
+    cvt.f32.f16 %f6, %h6;
+    cvt.f32.f16 %f7, %h7;
+    cvt.f32.f16 %f8, %h8;
+    cvt.f32.f16 %f9, %h9;
+    cvt.f32.f16 %f10, %h10;
+    cvt.f32.f16 %f11, %h11;
+    cvt.f32.f16 %f12, %h12;
+    cvt.f32.f16 %f13, %h13;
+    cvt.f32.f16 %f14, %h14;
+    cvt.f32.f16 %f15, %h15;
+
+    // Reduce packed half maxima locally, then reduce within each row subgroup.
+    max.NaN.f16x2 %v0, %v0, %v1;
+    max.NaN.f16x2 %v2, %v2, %v3;
+    max.NaN.f16x2 %v4, %v4, %v5;
+    max.NaN.f16x2 %v6, %v6, %v7;
+    max.NaN.f16x2 %v0, %v0, %v2;
+    max.NaN.f16x2 %v4, %v4, %v6;
+    max.NaN.f16x2 %v0, %v0, %v4;
+    mov.b32 {%ha, %hb}, %v0;
+    max.NaN.f16 %ha, %ha, %hb;
+    cvt.f32.f16 %m, %ha;
+    shfl.sync.bfly.b32 %t, %m, 8, 0x100f, 0xffffffff;
+    max.NaN.f32 %m, %m, %t;
+    shfl.sync.bfly.b32 %t, %m, 4, 0x100f, 0xffffffff;
+    max.NaN.f32 %m, %m, %t;
+    shfl.sync.bfly.b32 %t, %m, 2, 0x100f, 0xffffffff;
+    max.NaN.f32 %m, %m, %t;
+    shfl.sync.bfly.b32 %t, %m, 1, 0x100f, 0xffffffff;
+    max.NaN.f32 %m, %m, %t;
+
+    // Apply the common maximum bias and calculate stable FP32 exponentials.
+    mul.f32 %m, %m, 0fbfb8aa3b;
+    fma.rn.f32 %f0, %f0, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f0, %f0;
+    fma.rn.f32 %f1, %f1, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f1, %f1;
+    fma.rn.f32 %f2, %f2, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f2, %f2;
+    fma.rn.f32 %f3, %f3, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f3, %f3;
+    fma.rn.f32 %f4, %f4, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f4, %f4;
+    fma.rn.f32 %f5, %f5, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f5, %f5;
+    fma.rn.f32 %f6, %f6, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f6, %f6;
+    fma.rn.f32 %f7, %f7, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f7, %f7;
+    fma.rn.f32 %f8, %f8, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f8, %f8;
+    fma.rn.f32 %f9, %f9, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f9, %f9;
+    fma.rn.f32 %f10, %f10, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f10, %f10;
+    fma.rn.f32 %f11, %f11, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f11, %f11;
+    fma.rn.f32 %f12, %f12, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f12, %f12;
+    fma.rn.f32 %f13, %f13, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f13, %f13;
+    fma.rn.f32 %f14, %f14, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f14, %f14;
+    fma.rn.f32 %f15, %f15, 0f3fb8aa3b, %m;
+    ex2.approx.f32 %f15, %f15;
+
+    // Sum all numerators within each independent row subgroup.
+    add.f32 %s0, %f0, %f1;
+    add.f32 %s1, %f2, %f3;
+    add.f32 %s2, %f4, %f5;
+    add.f32 %s3, %f6, %f7;
+    add.f32 %s4, %f8, %f9;
+    add.f32 %s5, %f10, %f11;
+    add.f32 %s6, %f12, %f13;
+    add.f32 %s7, %f14, %f15;
+    add.f32 %s0, %s0, %s1;
+    add.f32 %s2, %s2, %s3;
+    add.f32 %s4, %s4, %s5;
+    add.f32 %s6, %s6, %s7;
+    add.f32 %s0, %s0, %s2;
+    add.f32 %s4, %s4, %s6;
+    add.f32 %s0, %s0, %s4;
+    shfl.sync.bfly.b32 %t, %s0, 8, 0x100f, 0xffffffff;
+    add.f32 %s0, %s0, %t;
+    shfl.sync.bfly.b32 %t, %s0, 4, 0x100f, 0xffffffff;
+    add.f32 %s0, %s0, %t;
+    shfl.sync.bfly.b32 %t, %s0, 2, 0x100f, 0xffffffff;
+    add.f32 %s0, %s0, %t;
+    shfl.sync.bfly.b32 %t, %s0, 1, 0x100f, 0xffffffff;
+    add.f32 %s0, %s0, %t;
+
+    // Normalize in FP32 and pack adjacent FP16 outputs.
+    rcp.approx.f32 %inv, %s0;
+    mul.f32 %f0, %f0, %inv;
+    mul.f32 %f1, %f1, %inv;
+    mul.f32 %f2, %f2, %inv;
+    mul.f32 %f3, %f3, %inv;
+    mul.f32 %f4, %f4, %inv;
+    mul.f32 %f5, %f5, %inv;
+    mul.f32 %f6, %f6, %inv;
+    mul.f32 %f7, %f7, %inv;
+    mul.f32 %f8, %f8, %inv;
+    mul.f32 %f9, %f9, %inv;
+    mul.f32 %f10, %f10, %inv;
+    mul.f32 %f11, %f11, %inv;
+    mul.f32 %f12, %f12, %inv;
+    mul.f32 %f13, %f13, %inv;
+    mul.f32 %f14, %f14, %inv;
+    mul.f32 %f15, %f15, %inv;
+    cvt.rn.f16x2.f32 %out0, %f1, %f0;
+    cvt.rn.f16x2.f32 %out1, %f3, %f2;
+    cvt.rn.f16x2.f32 %out2, %f5, %f4;
+    cvt.rn.f16x2.f32 %out3, %f7, %f6;
+    cvt.rn.f16x2.f32 %out4, %f9, %f8;
+    cvt.rn.f16x2.f32 %out5, %f11, %f10;
+    cvt.rn.f16x2.f32 %out6, %f13, %f12;
+    cvt.rn.f16x2.f32 %out7, %f15, %f14;
+
+    // Store coalesced output vectors, skipping only out-of-range rows.
+    @%pRow st.global.v4.b32 [%rd3+0], {%out0, %out1, %out2, %out3};
+    @%pRow st.global.v4.b32 [%rd3+256], {%out4, %out5, %out6, %out7};
+
+    // Advance whole CTA row batches together so all warp shuffles remain converged.
+    add.u32 %r1, %r1, %r6;
+    add.u32 %r3, %r3, %r6;
+    add.u64 %rd2, %rd2, %rd6;
+    add.u64 %rd3, %rd3, %rd7;
+    setp.lt.u32 %pLoop, %r1, %r0;
+    @%pLoop bra.uni ROW_LOOP;
+DONE:
+    ret;
+}

@@ -1,0 +1,65 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+.extern .shared .align 16 .b8 global_smem[];
+.visible .entry kernel(
+.param .u64 x_ptr,
+.param .u64 output_ptr,
+.param .u64 dummy_ptr1,
+.param .u64 dummy_ptr2
+)
+{
+.reg .b32 %t, %b, %i, %p<4>;
+.reg .b64 %x, %y, %off;
+.reg .b16 %h<8>;
+.reg .f32 %v<4>, %a<4>;
+// Each thread handles four adjacent half elements within its 1024-element tile.
+ld.param.u64 %x, [x_ptr];
+ld.param.u64 %y, [output_ptr];
+mov.u32 %t, %tid.x;
+mov.u32 %b, %ctaid.x;
+shl.b32 %i, %b, 10;
+mad.lo.u32 %i, %t, 4, %i;
+mul.wide.u32 %off, %i, 2;
+add.u64 %x, %x, %off;
+add.u64 %y, %y, %off;
+// Load four packed half values and convert them to float32.
+ld.global.v2.b32 {%p0, %p1}, [%x];
+mov.b32 {%h0, %h1}, %p0;
+mov.b32 {%h2, %h3}, %p1;
+cvt.f32.f16 %v0, %h0;
+cvt.f32.f16 %v1, %h1;
+cvt.f32.f16 %v2, %h2;
+cvt.f32.f16 %v3, %h3;
+// Compute exp(-x) using the base-2 exponential.
+mul.f32 %a0, %v0, 0fBFB8AA3B;
+mul.f32 %a1, %v1, 0fBFB8AA3B;
+mul.f32 %a2, %v2, 0fBFB8AA3B;
+mul.f32 %a3, %v3, 0fBFB8AA3B;
+ex2.approx.f32 %a0, %a0;
+ex2.approx.f32 %a1, %a1;
+ex2.approx.f32 %a2, %a2;
+ex2.approx.f32 %a3, %a3;
+// Form x / (1 + exp(-x)) in float32.
+add.f32 %a0, %a0, 0f3F800000;
+add.f32 %a1, %a1, 0f3F800000;
+add.f32 %a2, %a2, 0f3F800000;
+add.f32 %a3, %a3, 0f3F800000;
+rcp.approx.f32 %a0, %a0;
+rcp.approx.f32 %a1, %a1;
+rcp.approx.f32 %a2, %a2;
+rcp.approx.f32 %a3, %a3;
+mul.f32 %v0, %v0, %a0;
+mul.f32 %v1, %v1, %a1;
+mul.f32 %v2, %v2, %a2;
+mul.f32 %v3, %v3, %a3;
+// Round to half and store all four results without a mask.
+cvt.rn.f16.f32 %h4, %v0;
+cvt.rn.f16.f32 %h5, %v1;
+cvt.rn.f16.f32 %h6, %v2;
+cvt.rn.f16.f32 %h7, %v3;
+mov.b32 %p2, {%h4, %h5};
+mov.b32 %p3, {%h6, %h7};
+st.global.v2.b32 [%y], {%p2, %p3};
+ret;
+}

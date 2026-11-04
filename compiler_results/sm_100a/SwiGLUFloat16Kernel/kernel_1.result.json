@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_50llcaHS6LFjKwFYVtWxgtfL",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007071999832987785,
+    "triton_p50": 0.007168640093877912,
+    "triton_p80": 0.007351679960265756,
+    "triton_p90": 0.00903423985466361,
+    "triton_p95": 0.00915583984926343,
+    "triton_p99": 0.009769663885235787,
+    "p20": 0.007071999832987785,
+    "p50": 0.0071680000983178616,
+    "p80": 0.007328000031411648,
+    "p90": 0.008942335929721596,
+    "p95": 0.00915203183889389,
+    "p99": 0.009279999881982803,
+    "speedup_vs_triton": 1.0000892850936485,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.354895,
+  "autotune_metrics": {
+    "operator": "SwiGLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 4
+      },
+      "latency_ms": 0.007443573003877233,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0000892850936485,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 gate_ptr,\n.param .u64 value_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n){\n.reg .b32 %r<3>,%g<4>,%v<4>,%o<4>;\n.reg .b64 %a<4>;\n.reg .b16 %h<16>;\n.reg .f32 %x<8>,%y<8>,%e<8>;\n// Each thread owns eight adjacent elements in a complete 1024-element tile.\nld.param.u64 %a0,[gate_ptr];\nld.param.u64 %a1,[value_ptr];\nld.param.u64 %a2,[output_ptr];\nmov.u32 %r0,%ctaid.x;\nmov.u32 %r1,%tid.x;\nshl.b32 %r0,%r0,11;\nshl.b32 %r1,%r1,4;\nadd.u32 %r2,%r0,%r1;\ncvt.u64.u32 %a3,%r2;\nadd.u64 %a0,%a0,%a3;\nadd.u64 %a1,%a1,%a3;\nadd.u64 %a2,%a2,%a3;\n// Aligned 16-byte loads cover all eight half values without masks.\nld.global.v4.b32 {%g0,%g1,%g2,%g3},[%a0];\nld.global.v4.b32 {%v0,%v1,%v2,%v3},[%a1];\nmov.b32 {%h0,%h1},%g0;\nmov.b32 {%h2,%h3},%g1;\nmov.b32 {%h4,%h5},%g2;\nmov.b32 {%h6,%h7},%g3;\nmov.b32 {%h8,%h9},%v0;\nmov.b32 {%h10,%h11},%v1;\nmov.b32 {%h12,%h13},%v2;\nmov.b32 {%h14,%h15},%v3;\n// Expand the inputs to float32 before doing arithmetic.\ncvt.f32.f16 %x0,%h0;\ncvt.f32.f16 %x1,%h1;\ncvt.f32.f16 %x2,%h2;\ncvt.f32.f16 %x3,%h3;\ncvt.f32.f16 %x4,%h4;\ncvt.f32.f16 %x5,%h5;\ncvt.f32.f16 %x6,%h6;\ncvt.f32.f16 %x7,%h7;\ncvt.f32.f16 %y0,%h8;\ncvt.f32.f16 %y1,%h9;\ncvt.f32.f16 %y2,%h10;\ncvt.f32.f16 %y3,%h11;\ncvt.f32.f16 %y4,%h12;\ncvt.f32.f16 %y5,%h13;\ncvt.f32.f16 %y6,%h14;\ncvt.f32.f16 %y7,%h15;\n// Convert the exponential argument to base two using -log2(e).\nmul.f32 %e0,%x0,0fBFB8AA3B;\nmul.f32 %e1,%x1,0fBFB8AA3B;\nmul.f32 %e2,%x2,0fBFB8AA3B;\nmul.f32 %e3,%x3,0fBFB8AA3B;\nmul.f32 %e4,%x4,0fBFB8AA3B;\nmul.f32 %e5,%x5,0fBFB8AA3B;\nmul.f32 %e6,%x6,0fBFB8AA3B;\nmul.f32 %e7,%x7,0fBFB8AA3B;\nex2.approx.f32 %e0,%e0;\nex2.approx.f32 %e1,%e1;\nex2.approx.f32 %e2,%e2;\nex2.approx.f32 %e3,%e3;\nex2.approx.f32 %e4,%e4;\nex2.approx.f32 %e5,%e5;\nex2.approx.f32 %e6,%e6;\nex2.approx.f32 %e7,%e7;\n// Form the sigmoid denominators and their reciprocals.\nadd.f32 %e0,%e0,0f3F800000;\nadd.f32 %e1,%e1,0f3F800000;\nadd.f32 %e2,%e2,0f3F800000;\nadd.f32 %e3,%e3,0f3F800000;\nadd.f32 %e4,%e4,0f3F800000;\nadd.f32 %e5,%e5,0f3F800000;\nadd.f32 %e6,%e6,0f3F800000;\nadd.f32 %e7,%e7,0f3F800000;\nrcp.approx.f32 %e0,%e0;\nrcp.approx.f32 %e1,%e1;\nrcp.approx.f32 %e2,%e2;\nrcp.approx.f32 %e3,%e3;\nrcp.approx.f32 %e4,%e4;\nrcp.approx.f32 %e5,%e5;\nrcp.approx.f32 %e6,%e6;\nrcp.approx.f32 %e7,%e7;\n// Preserve the order: divide gate first, then multiply by value.\nmul.f32 %x0,%x0,%e0;\nmul.f32 %x1,%x1,%e1;\nmul.f32 %x2,%x2,%e2;\nmul.f32 %x3,%x3,%e3;\nmul.f32 %x4,%x4,%e4;\nmul.f32 %x5,%x5,%e5;\nmul.f32 %x6,%x6,%e6;\nmul.f32 %x7,%x7,%e7;\nmul.f32 %x0,%x0,%y0;\nmul.f32 %x1,%x1,%y1;\nmul.f32 %x2,%x2,%y2;\nmul.f32 %x3,%x3,%y3;\nmul.f32 %x4,%x4,%y4;\nmul.f32 %x5,%x5,%y5;\nmul.f32 %x6,%x6,%y6;\nmul.f32 %x7,%x7,%y7;\n// Round and pack pairs, then write one aligned 16-byte vector.\ncvt.rn.f16x2.f32 %o0,%x1,%x0;\ncvt.rn.f16x2.f32 %o1,%x3,%x2;\ncvt.rn.f16x2.f32 %o2,%x5,%x4;\ncvt.rn.f16x2.f32 %o3,%x7,%x6;\nst.global.v4.b32 [%a2],{%o0,%o1,%o2,%o3};\nret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

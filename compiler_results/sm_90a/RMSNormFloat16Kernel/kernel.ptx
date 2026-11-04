@@ -1,0 +1,143 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 weight_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %xp,%wp,%op,%off;
+    .reg .b32 %thread,%row,%idx,%lane,%warp,%sm,%base,%a<4>,%b<4>,%c<4>;
+    .reg .b16 %h<8>;
+    .reg .f32 %x<8>,%w<8>,%s<8>,%v,%t,%r;
+    .reg .pred %p;
+
+    // Each thread owns eight adjacent half elements of its row.
+    ld.param.u64 %xp,[x_ptr];
+    ld.param.u64 %wp,[weight_ptr];
+    ld.param.u64 %op,[output_ptr];
+    mov.u32 %thread,%tid.x;
+    mov.u32 %row,%ctaid.x;
+    mov.u32 %base,global_smem;
+    shl.b32 %idx,%row,13;
+    mad.lo.u32 %idx,%thread,16,%idx;
+    cvt.u64.u32 %off,%idx;
+    add.u64 %xp,%xp,%off;
+    add.u64 %wp,%wp,%off;
+    add.u64 %op,%op,%off;
+
+    // Vector loads retain inputs and prefetch weights for the epilogue.
+    ld.global.v4.b32 {%a0,%a1,%a2,%a3},[%xp];
+    ld.global.v4.b32 {%b0,%b1,%b2,%b3},[%wp];
+    mov.b32 {%h0,%h1},%a0;
+    mov.b32 {%h2,%h3},%a1;
+    mov.b32 {%h4,%h5},%a2;
+    mov.b32 {%h6,%h7},%a3;
+    cvt.f32.f16 %x0,%h0;
+    cvt.f32.f16 %x1,%h1;
+    cvt.f32.f16 %x2,%h2;
+    cvt.f32.f16 %x3,%h3;
+    cvt.f32.f16 %x4,%h4;
+    cvt.f32.f16 %x5,%h5;
+    cvt.f32.f16 %x6,%h6;
+    cvt.f32.f16 %x7,%h7;
+
+    // Accumulate eight squares with a balanced float32 tree.
+    mul.f32 %s0,%x0,%x0;
+    mul.f32 %s1,%x1,%x1;
+    mul.f32 %s2,%x2,%x2;
+    mul.f32 %s3,%x3,%x3;
+    mul.f32 %s4,%x4,%x4;
+    mul.f32 %s5,%x5,%x5;
+    mul.f32 %s6,%x6,%x6;
+    mul.f32 %s7,%x7,%x7;
+    add.f32 %s0,%s0,%s1;
+    add.f32 %s2,%s2,%s3;
+    add.f32 %s4,%s4,%s5;
+    add.f32 %s6,%s6,%s7;
+    add.f32 %s0,%s0,%s2;
+    add.f32 %s4,%s4,%s6;
+    add.f32 %v,%s0,%s4;
+
+    // Reduce each warp and store one partial sum in the 64-byte workspace.
+    shfl.sync.bfly.b32 %t,%v,16,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,8,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,4,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,2,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,1,31,-1;
+    add.f32 %v,%v,%t;
+    and.b32 %lane,%thread,31;
+    shr.u32 %warp,%thread,5;
+    shl.b32 %sm,%warp,2;
+    add.u32 %sm,%sm,%base;
+    setp.eq.u32 %p,%lane,0;
+    @%p st.shared.f32 [%sm],%v;
+    bar.sync 0;
+
+    // Both half-warps independently reduce all sixteen shared partial sums.
+    and.b32 %sm,%lane,15;
+    shl.b32 %sm,%sm,2;
+    add.u32 %sm,%sm,%base;
+    ld.shared.f32 %v,[%sm];
+    shfl.sync.bfly.b32 %t,%v,8,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,4,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,2,31,-1;
+    add.f32 %v,%v,%t;
+    shfl.sync.bfly.b32 %t,%v,1,31,-1;
+    add.f32 %v,%v,%t;
+
+    // Normalize by row length and add epsilon before reciprocal square root.
+    mul.f32 %r,%v,0f39800000;
+    add.f32 %r,%r,0f358637bd;
+    rsqrt.approx.f32 %r,%r;
+
+    // Unpack per-element weights and multiply in the original float32 order.
+    mov.b32 {%h0,%h1},%b0;
+    mov.b32 {%h2,%h3},%b1;
+    mov.b32 {%h4,%h5},%b2;
+    mov.b32 {%h6,%h7},%b3;
+    cvt.f32.f16 %w0,%h0;
+    cvt.f32.f16 %w1,%h1;
+    cvt.f32.f16 %w2,%h2;
+    cvt.f32.f16 %w3,%h3;
+    cvt.f32.f16 %w4,%h4;
+    cvt.f32.f16 %w5,%h5;
+    cvt.f32.f16 %w6,%h6;
+    cvt.f32.f16 %w7,%h7;
+    mul.f32 %x0,%x0,%r;
+    mul.f32 %x1,%x1,%r;
+    mul.f32 %x2,%x2,%r;
+    mul.f32 %x3,%x3,%r;
+    mul.f32 %x4,%x4,%r;
+    mul.f32 %x5,%x5,%r;
+    mul.f32 %x6,%x6,%r;
+    mul.f32 %x7,%x7,%r;
+    mul.f32 %x0,%x0,%w0;
+    mul.f32 %x1,%x1,%w1;
+    mul.f32 %x2,%x2,%w2;
+    mul.f32 %x3,%x3,%w3;
+    mul.f32 %x4,%x4,%w4;
+    mul.f32 %x5,%x5,%w5;
+    mul.f32 %x6,%x6,%w6;
+    mul.f32 %x7,%x7,%w7;
+
+    // Pack rounded halves and write the complete aligned sixteen-byte segment.
+    cvt.rn.f16x2.f32 %c0,%x1,%x0;
+    cvt.rn.f16x2.f32 %c1,%x3,%x2;
+    cvt.rn.f16x2.f32 %c2,%x5,%x4;
+    cvt.rn.f16x2.f32 %c3,%x7,%x6;
+    st.global.v4.b32 [%op],{%c0,%c1,%c2,%c3};
+    ret;
+}

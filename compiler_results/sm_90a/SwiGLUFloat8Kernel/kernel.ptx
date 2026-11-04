@@ -1,0 +1,83 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+.extern .shared .align 16 .b8 global_smem[];
+.visible .entry kernel(
+.param .u64 gate_ptr,
+.param .u64 value_ptr,
+.param .u64 output_ptr,
+.param .u64 dummy_ptr1,
+.param .u64 dummy_ptr2
+){
+.reg .b32 %r<14>;
+.reg .b64 %p<8>;
+.reg .b16 %h<12>;
+.reg .f32 %g<4>, %v<4>, %e<4>;
+// Each thread handles four contiguous elements of the 2048-element tile.
+ld.param.u64 %p0,[gate_ptr];
+ld.param.u64 %p1,[value_ptr];
+ld.param.u64 %p2,[output_ptr];
+mov.u32 %r0,%ctaid.x;
+mov.u32 %r1,%tid.x;
+shl.b32 %r0,%r0,11;
+shl.b32 %r1,%r1,2;
+add.u32 %r2,%r0,%r1;
+cvt.u64.u32 %p3,%r2;
+add.u64 %p4,%p0,%p3;
+add.u64 %p5,%p1,%p3;
+shl.b64 %p3,%p3,1;
+add.u64 %p6,%p2,%p3;
+// Load packed FP8 inputs and convert pairs exactly to FP16.
+ld.global.u32 %r3,[%p4];
+ld.global.u32 %r4,[%p5];
+mov.b32 {%h0,%h1},%r3;
+mov.b32 {%h2,%h3},%r4;
+cvt.rn.f16x2.e4m3x2 %r5,%h0;
+cvt.rn.f16x2.e4m3x2 %r6,%h1;
+cvt.rn.f16x2.e4m3x2 %r7,%h2;
+cvt.rn.f16x2.e4m3x2 %r8,%h3;
+mov.b32 {%h4,%h5},%r5;
+mov.b32 {%h6,%h7},%r6;
+mov.b32 {%h8,%h9},%r7;
+mov.b32 {%h10,%h11},%r8;
+// Promote to FP32 before evaluating the activation.
+cvt.f32.f16 %g0,%h4;
+cvt.f32.f16 %g1,%h5;
+cvt.f32.f16 %g2,%h6;
+cvt.f32.f16 %g3,%h7;
+cvt.f32.f16 %v0,%h8;
+cvt.f32.f16 %v1,%h9;
+cvt.f32.f16 %v2,%h10;
+cvt.f32.f16 %v3,%h11;
+// exp(-gate) uses base-two exponentiation with -log2(e).
+mul.f32 %e0,%g0,0fBFB8AA3B;
+mul.f32 %e1,%g1,0fBFB8AA3B;
+mul.f32 %e2,%g2,0fBFB8AA3B;
+mul.f32 %e3,%g3,0fBFB8AA3B;
+ex2.approx.f32 %e0,%e0;
+ex2.approx.f32 %e1,%e1;
+ex2.approx.f32 %e2,%e2;
+ex2.approx.f32 %e3,%e3;
+add.f32 %e0,%e0,0f3F800000;
+add.f32 %e1,%e1,0f3F800000;
+add.f32 %e2,%e2,0f3F800000;
+add.f32 %e3,%e3,0f3F800000;
+rcp.approx.f32 %e0,%e0;
+rcp.approx.f32 %e1,%e1;
+rcp.approx.f32 %e2,%e2;
+rcp.approx.f32 %e3,%e3;
+// Preserve the FP32 multiplication order, then round once to FP16.
+mul.f32 %g0,%g0,%e0;
+mul.f32 %g1,%g1,%e1;
+mul.f32 %g2,%g2,%e2;
+mul.f32 %g3,%g3,%e3;
+mul.f32 %g0,%g0,%v0;
+mul.f32 %g1,%g1,%v1;
+mul.f32 %g2,%g2,%v2;
+mul.f32 %g3,%g3,%v3;
+cvt.rn.f16x2.f32 %r9,%g1,%g0;
+cvt.rn.f16x2.f32 %r10,%g3,%g2;
+// All tile elements are valid; write four contiguous FP16 results.
+st.global.v2.u32 [%p6],{%r9,%r10};
+ret;
+}

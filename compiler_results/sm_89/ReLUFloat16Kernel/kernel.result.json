@@ -1,0 +1,35 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b64 %x, %y, %off, %a, %b;\n    .reg .b32 %t, %pid, %idx, %v, %r, %zero;\n\n    // Each thread owns two adjacent halves in its 256-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %pid, %ctaid.x;\n    mad.lo.u32 %idx, %pid, 128, %t;\n    mul.wide.u32 %off, %idx, 4;\n    add.u64 %a, %x, %off;\n    add.u64 %b, %y, %off;\n\n    // Load and clamp both halves, preserving NaNs and subnormals.\n    mov.b32 %zero, 0;\n    ld.global.b32 %v, [%a];\n    max.NaN.f16x2 %r, %v, %zero;\n\n    // The original kernel has no boundary mask; store the complete pair.\n    st.global.b32 [%b], %r;\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "ptxas rejected a local %tid register that shadowed %tid.x; renamed it.",
+    "ptxas rejected an immediate zero operand for max.NaN.f16x2; used a .b32 register."
+  ],
+  "speedup": 1.004089017008789,
+  "p50": 0.008843200178816915,
+  "autotune_metrics": {
+    "operator": "ReLUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 256
+    },
+    "selected_config": {
+      "block_size": 256,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 256,
+        "num_warps": 4
+      },
+      "latency_ms": 0.008740130859426633,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.24928250000000002,
+  "max_budget_usd": 1.0
+}

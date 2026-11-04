@@ -1,0 +1,79 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %idx;\n    .reg .b64 %x, %y, %off, %a, %o;\n    .reg .b16 %h<4>;\n    .reg .b32 %v<4>;\n    .reg .f32 %f<4>, %e<4>, %s<4>;\n\n    // Cover the entire 512-element tile with four consecutive elements per thread.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    mad.lo.u32 %idx, %b, 128, %t;\n    mul.wide.u32 %off, %idx, 8;\n    add.u64 %a, %x, %off;\n    add.u64 %o, %y, %off;\n\n    // Load four half values; the fixed shape has no partial tiles.\n    ld.global.v2.b32 {%v0, %v1}, [%a];\n    mov.b32 {%h0, %h1}, %v0;\n    mov.b32 {%h2, %h3}, %v1;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n\n    // Evaluate exp(-x) using the base-two exponential in float32.\n    mul.f32 %e0, %f0, 0fBFB8AA3B;\n    mul.f32 %e1, %f1, 0fBFB8AA3B;\n    mul.f32 %e2, %f2, 0fBFB8AA3B;\n    mul.f32 %e3, %f3, 0fBFB8AA3B;\n    ex2.approx.f32 %e0, %e0;\n    ex2.approx.f32 %e1, %e1;\n    ex2.approx.f32 %e2, %e2;\n    ex2.approx.f32 %e3, %e3;\n\n    // Form the sigmoid denominators and multiply x by their reciprocals.\n    add.f32 %s0, %e0, 0f3F800000;\n    add.f32 %s1, %e1, 0f3F800000;\n    add.f32 %s2, %e2, 0f3F800000;\n    add.f32 %s3, %e3, 0f3F800000;\n    rcp.approx.f32 %s0, %s0;\n    rcp.approx.f32 %s1, %s1;\n    rcp.approx.f32 %s2, %s2;\n    rcp.approx.f32 %s3, %s3;\n    mul.f32 %f0, %f0, %s0;\n    mul.f32 %f1, %f1, %s1;\n    mul.f32 %f2, %f2, %s2;\n    mul.f32 %f3, %f3, %s3;\n\n    // Round and pack pairs into half precision, preserving element order.\n    cvt.rn.f16x2.f32 %v2, %f1, %f0;\n    cvt.rn.f16x2.f32 %v3, %f3, %f2;\n    st.global.v2.b32 [%o], {%v2, %v3};\n    ret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": []
+  },
+  "evaluation": {
+    "kernel_name": "SiLUFloat16Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007040000054985285,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.00723200011998415,
+    "triton_p90": 0.0073004801105707885,
+    "triton_p95": 0.008078304159455001,
+    "triton_p99": 0.00828449895232916,
+    "p20": 0.007040000054985285,
+    "p50": 0.007135999854654074,
+    "p80": 0.00723200011998415,
+    "p90": 0.007304960079491139,
+    "p95": 0.008083840245380997,
+    "p99": 0.008287359774112702,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-if_mrljb/kernel.ptx -o /tmp/triton-ptxas-if_mrljb/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 20 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 3.716 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "SiLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 4
+      },
+      "latency_ms": 0.007181095579041138,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 0.3754285
+}

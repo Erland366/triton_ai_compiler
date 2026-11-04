@@ -1,0 +1,81 @@
+{
+  "iteration": 0,
+  "try": 0,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %p<2>;\n    .reg .b32 %r<6>, %a<16>;\n    .reg .b64 %rd<4>;\n    .reg .f32 %f<11>;\n\n    // Keep the 256-thread launch and process four unrolled slices in one full warp.\n    mov.u32 %r0, %tid.x;\n    setp.ge.u32 %p0, %r0, 32;\n    @%p0 bra DONE;\n    ld.param.u64 %rd0, [x_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n    mov.u32 %r1, %ctaid.x;\n    mov.u32 %r2, %ctaid.y;\n    shl.b32 %r3, %r2, 12;\n    shl.b32 %r4, %r1, 11;\n    add.u32 %r3, %r3, %r4;\n    mad.lo.u32 %r3, %r0, 16, %r3;\n    cvt.u64.u32 %rd2, %r3;\n    add.u64 %rd2, %rd0, %rd2;\n    mad.wide.u32 %rd3, %r2, 4, %rd1;\n\n    // Each 512-byte slice is coalesced, and the four loads cover the entire 2048-byte tile.\n    ld.global.v4.u32 {%a0, %a1, %a2, %a3}, [%rd2];\n    ld.global.v4.u32 {%a4, %a5, %a6, %a7}, [%rd2+512];\n    ld.global.v4.u32 {%a8, %a9, %a10, %a11}, [%rd2+1024];\n    ld.global.v4.u32 {%a12, %a13, %a14, %a15}, [%rd2+1536];\n\n    // Two independent FP32 accumulators hide tensor-core latency while summing FP8 rows.\n    mov.u32 %r5, 0x38383838;\n    mov.f32 %f8, 0f00000000;\n    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%f0, %f1, %f2, %f3}, {%a0, %a1, %a2, %a3}, {%r5, %r5}, {%f8, %f8, %f8, %f8};\n    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%f4, %f5, %f6, %f7}, {%a4, %a5, %a6, %a7}, {%r5, %r5}, {%f8, %f8, %f8, %f8};\n    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%f0, %f1, %f2, %f3}, {%a8, %a9, %a10, %a11}, {%r5, %r5}, {%f0, %f1, %f2, %f3};\n    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%f4, %f5, %f6, %f7}, {%a12, %a13, %a14, %a15}, {%r5, %r5}, {%f4, %f5, %f6, %f7};\n    add.f32 %f0, %f0, %f4;\n    add.f32 %f2, %f2, %f6;\n    add.f32 %f0, %f0, %f2;\n\n    // Combine eight distinct row pairs without counting duplicate matrix columns.\n    shfl.sync.bfly.b32 %f9, %f0, 16, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f9;\n    shfl.sync.bfly.b32 %f9, %f0, 8, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f9;\n    shfl.sync.bfly.b32 %f9, %f0, 4, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f9;\n\n    // One atomic update preserves the output; no later access requires acquire ordering.\n    setp.eq.u32 %p1, %r0, 0;\n    @%p1 red.release.gpu.global.add.f32 [%rd3], %f0;\nDONE:\n    ret;\n}\n",
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": [
+      "Sanitizer line-info insertion required each MMA instruction to remain on one line."
+    ]
+  },
+  "evaluation": {
+    "kernel_name": "ReductionSumFloat8Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.009141759760677815,
+    "triton_p50": 0.009221120085567237,
+    "triton_p80": 0.009299840033054351,
+    "triton_p90": 0.010365567902103068,
+    "triton_p95": 0.010891455809585745,
+    "triton_p99": 0.011321292737126351,
+    "p20": 0.009140479750931263,
+    "p50": 0.009205119982361794,
+    "p80": 0.009297920018434524,
+    "p90": 0.009836671914905311,
+    "p95": 0.010728640197776258,
+    "p99": 0.011306240111589433,
+    "speedup_vs_triton": 1.0017381743243001,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-iokt551s/kernel.ptx -o /tmp/triton-ptxas-iokt551s/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 0 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 31 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 5.413 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "ReductionSumFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 8
+      },
+      "latency_ms": 0.009388907208465195,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 3.6608055
+}

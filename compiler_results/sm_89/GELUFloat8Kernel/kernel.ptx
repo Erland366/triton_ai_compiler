@@ -1,0 +1,136 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b32 %r<8>;
+    .reg .b64 %a<6>;
+    .reg .b16 %h<8>;
+    .reg .f32 %x<4>, %t<4>, %v<4>, %e<4>, %z<4>;
+
+    // Each thread owns four adjacent elements of the 512-element tile.
+    ld.param.u64 %a0, [x_ptr];
+    ld.param.u64 %a1, [output_ptr];
+    mov.u32 %r0, %ctaid.x;
+    mov.u32 %r1, %tid.x;
+    shl.b32 %r1, %r1, 2;
+    mad.lo.u32 %r2, %r0, 512, %r1;
+
+    // Load four FP8 values together and compute the output address.
+    mul.wide.u32 %a2, %r2, 1;
+    add.u64 %a3, %a0, %a2;
+    ld.global.u32 %r3, [%a3];
+    mul.wide.u32 %a2, %r2, 2;
+    add.u64 %a4, %a1, %a2;
+
+    // Convert FP8 pairs to FP16, then widen exactly to FP32.
+    mov.b32 {%h0, %h1}, %r3;
+    cvt.rn.f16x2.e4m3x2 %r4, %h0;
+    cvt.rn.f16x2.e4m3x2 %r5, %h1;
+    mov.b32 {%h0, %h1}, %r4;
+    mov.b32 {%h2, %h3}, %r5;
+    cvt.f32.f16 %x0, %h0;
+    cvt.f32.f16 %x1, %h1;
+    cvt.f32.f16 %x2, %h2;
+    cvt.f32.f16 %x3, %h3;
+
+    // Approximate erf(x/sqrt(2)) using a Gaussian and a polynomial in t.
+    abs.f32 %z0, %x0;
+    fma.rn.f32 %t0, %z0, 0.231641888, 1.0;
+    rcp.approx.ftz.f32 %t0, %t0;
+    mul.f32 %e0, %x0, %x0;
+    mul.f32 %e0, %e0, -0.7213475204;
+    ex2.approx.ftz.f32 %e0, %e0;
+    fma.rn.f32 %v0, %t0, 1.061405429, -1.453152027;
+    fma.rn.f32 %v0, %t0, %v0, 1.421413741;
+    fma.rn.f32 %v0, %t0, %v0, -0.284496736;
+    fma.rn.f32 %v0, %t0, %v0, 0.254829592;
+    mul.f32 %v0, %v0, %t0;
+    neg.f32 %v0, %v0;
+    fma.rn.f32 %v0, %v0, %e0, 1.0;
+
+    // Restore the erf sign, evaluate GELU, and round to FP16.
+    copysign.f32 %v0, %x0, %v0;
+    add.f32 %v0, %v0, 1.0;
+    mul.f32 %x0, %x0, 0.5;
+    mul.f32 %x0, %x0, %v0;
+    cvt.rn.f16.f32 %h4, %x0;
+
+    // Evaluate the same erf approximation for the second element.
+    abs.f32 %z1, %x1;
+    fma.rn.f32 %t1, %z1, 0.231641888, 1.0;
+    rcp.approx.ftz.f32 %t1, %t1;
+    mul.f32 %e1, %x1, %x1;
+    mul.f32 %e1, %e1, -0.7213475204;
+    ex2.approx.ftz.f32 %e1, %e1;
+    fma.rn.f32 %v1, %t1, 1.061405429, -1.453152027;
+    fma.rn.f32 %v1, %t1, %v1, 1.421413741;
+    fma.rn.f32 %v1, %t1, %v1, -0.284496736;
+    fma.rn.f32 %v1, %t1, %v1, 0.254829592;
+    mul.f32 %v1, %v1, %t1;
+    neg.f32 %v1, %v1;
+    fma.rn.f32 %v1, %v1, %e1, 1.0;
+
+    // Finish GELU for the second element.
+    copysign.f32 %v1, %x1, %v1;
+    add.f32 %v1, %v1, 1.0;
+    mul.f32 %x1, %x1, 0.5;
+    mul.f32 %x1, %x1, %v1;
+    cvt.rn.f16.f32 %h5, %x1;
+
+    // Evaluate the same erf approximation for the third element.
+    abs.f32 %z2, %x2;
+    fma.rn.f32 %t2, %z2, 0.231641888, 1.0;
+    rcp.approx.ftz.f32 %t2, %t2;
+    mul.f32 %e2, %x2, %x2;
+    mul.f32 %e2, %e2, -0.7213475204;
+    ex2.approx.ftz.f32 %e2, %e2;
+    fma.rn.f32 %v2, %t2, 1.061405429, -1.453152027;
+    fma.rn.f32 %v2, %t2, %v2, 1.421413741;
+    fma.rn.f32 %v2, %t2, %v2, -0.284496736;
+    fma.rn.f32 %v2, %t2, %v2, 0.254829592;
+    mul.f32 %v2, %v2, %t2;
+    neg.f32 %v2, %v2;
+    fma.rn.f32 %v2, %v2, %e2, 1.0;
+
+    // Finish GELU for the third element.
+    copysign.f32 %v2, %x2, %v2;
+    add.f32 %v2, %v2, 1.0;
+    mul.f32 %x2, %x2, 0.5;
+    mul.f32 %x2, %x2, %v2;
+    cvt.rn.f16.f32 %h6, %x2;
+
+    // Evaluate the same erf approximation for the fourth element.
+    abs.f32 %z3, %x3;
+    fma.rn.f32 %t3, %z3, 0.231641888, 1.0;
+    rcp.approx.ftz.f32 %t3, %t3;
+    mul.f32 %e3, %x3, %x3;
+    mul.f32 %e3, %e3, -0.7213475204;
+    ex2.approx.ftz.f32 %e3, %e3;
+    fma.rn.f32 %v3, %t3, 1.061405429, -1.453152027;
+    fma.rn.f32 %v3, %t3, %v3, 1.421413741;
+    fma.rn.f32 %v3, %t3, %v3, -0.284496736;
+    fma.rn.f32 %v3, %t3, %v3, 0.254829592;
+    mul.f32 %v3, %v3, %t3;
+    neg.f32 %v3, %v3;
+    fma.rn.f32 %v3, %v3, %e3, 1.0;
+
+    // Finish GELU for the fourth element.
+    copysign.f32 %v3, %x3, %v3;
+    add.f32 %v3, %v3, 1.0;
+    mul.f32 %x3, %x3, 0.5;
+    mul.f32 %x3, %x3, %v3;
+    cvt.rn.f16.f32 %h7, %x3;
+
+    // Store four results together; the source kernel has no boundary mask.
+    st.global.v4.b16 [%a4], {%h4, %h5, %h6, %h7};
+    ret;
+}

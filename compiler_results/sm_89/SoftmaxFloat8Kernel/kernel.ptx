@@ -1,0 +1,165 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 output_ptr,
+    .param .u64 input_ptr,
+    .param .u32 input_row_stride,
+    .param .u32 output_row_stride,
+    .param .u32 n_rows,
+    .param .u32 n_cols,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<5>;
+    .reg .b16 %h<16>;
+    .reg .b32 %r<32>;
+    .reg .b64 %rd<10>;
+    .reg .f32 %f<16>;
+
+    // Retile independent rows into four warp-sized tasks per CTA.
+    ld.param.u32 %r0, [n_rows];
+    mov.u32 %r1, %ctaid.x;
+    shl.b32 %r1, %r1, 2;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra.uni DONE;
+    mov.u32 %r4, %tid.x;
+    shr.u32 %r5, %r4, 5;
+    and.b32 %r4, %r4, 31;
+    add.u32 %r1, %r1, %r5;
+    setp.ge.u32 %p0, %r1, %r0;
+    @%p0 bra.uni DONE;
+
+    // Each lane owns eight adjacent columns; row strides stay runtime inputs.
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    ld.param.u32 %r2, [input_row_stride];
+    ld.param.u32 %r3, [output_row_stride];
+    mul.wide.u32 %rd2, %r4, 8;
+    add.u64 %rd0, %rd0, %rd2;
+    mul.wide.u32 %rd3, %r4, 16;
+    add.u64 %rd1, %rd1, %rd3;
+
+ROW_LOOP:
+    // Vector-load all eight FP8 elements without a column mask.
+    mad.wide.u32 %rd4, %r1, %r2, %rd0;
+    ld.global.v2.b32 {%r10, %r11}, [%rd4];
+
+    // Prepare the output address independently of the input load.
+    mul.wide.u32 %rd5, %r1, %r3;
+    shl.b64 %rd5, %rd5, 1;
+    add.u64 %rd5, %rd1, %rd5;
+
+    // Convert the four FP8 pairs exactly into packed half values.
+    mov.b32 {%h0, %h1}, %r10;
+    mov.b32 {%h2, %h3}, %r11;
+    cvt.rn.f16x2.e4m3x2 %r12, %h0;
+    cvt.rn.f16x2.e4m3x2 %r13, %h1;
+    cvt.rn.f16x2.e4m3x2 %r14, %h2;
+    cvt.rn.f16x2.e4m3x2 %r15, %h3;
+
+    // Packed maxima are exact because every E4M3 value is representable in FP16.
+    max.NaN.f16x2 %r16, %r12, %r13;
+    max.NaN.f16x2 %r17, %r14, %r15;
+    max.NaN.f16x2 %r16, %r16, %r17;
+    mov.b32 {%h12, %h13}, %r16;
+    max.NaN.f16 %h14, %h12, %h13;
+    cvt.f32.f16 %f8, %h14;
+
+    // Signed max handles nonnegative maxima; all-negative rows need unsigned min.
+    mov.b32 %r24, %f8;
+    redux.sync.max.s32 %r25, %r24, -1;
+    setp.lt.s32 %p3, %r25, 0;
+    @%p3 redux.sync.min.u32 %r25, %r24, -1;
+    mov.b32 %f8, %r25;
+
+    // Promote all arithmetic inputs to FP32.
+    mov.b32 {%h4, %h5}, %r12;
+    cvt.f32.f16 %f0, %h4;
+    cvt.f32.f16 %f1, %h5;
+    mov.b32 {%h6, %h7}, %r13;
+    cvt.f32.f16 %f2, %h6;
+    cvt.f32.f16 %f3, %h7;
+    mov.b32 {%h8, %h9}, %r14;
+    cvt.f32.f16 %f4, %h8;
+    cvt.f32.f16 %f5, %h9;
+    mov.b32 {%h10, %h11}, %r15;
+    cvt.f32.f16 %f6, %h10;
+    cvt.f32.f16 %f7, %h11;
+
+    // Evaluate stabilized exponentials in FP32 using exp2 and log2(e).
+    sub.f32 %f0, %f0, %f8;
+    sub.f32 %f1, %f1, %f8;
+    sub.f32 %f2, %f2, %f8;
+    sub.f32 %f3, %f3, %f8;
+    sub.f32 %f4, %f4, %f8;
+    sub.f32 %f5, %f5, %f8;
+    sub.f32 %f6, %f6, %f8;
+    sub.f32 %f7, %f7, %f8;
+    mul.f32 %f0, %f0, 0f3fb8aa3b;
+    mul.f32 %f1, %f1, 0f3fb8aa3b;
+    mul.f32 %f2, %f2, 0f3fb8aa3b;
+    mul.f32 %f3, %f3, 0f3fb8aa3b;
+    mul.f32 %f4, %f4, 0f3fb8aa3b;
+    mul.f32 %f5, %f5, 0f3fb8aa3b;
+    mul.f32 %f6, %f6, 0f3fb8aa3b;
+    mul.f32 %f7, %f7, 0f3fb8aa3b;
+    ex2.approx.f32 %f0, %f0;
+    ex2.approx.f32 %f1, %f1;
+    ex2.approx.f32 %f2, %f2;
+    ex2.approx.f32 %f3, %f3;
+    ex2.approx.f32 %f4, %f4;
+    ex2.approx.f32 %f5, %f5;
+    ex2.approx.f32 %f6, %f6;
+    ex2.approx.f32 %f7, %f7;
+
+    // Sum the eight local numerators in a balanced FP32 tree.
+    add.f32 %f8, %f0, %f1;
+    add.f32 %f9, %f2, %f3;
+    add.f32 %f10, %f4, %f5;
+    add.f32 %f11, %f6, %f7;
+    add.f32 %f8, %f8, %f9;
+    add.f32 %f9, %f10, %f11;
+    add.f32 %f8, %f8, %f9;
+
+    // Broadcast the full row denominator through warp butterfly reductions.
+    shfl.sync.bfly.b32 %f12, %f8, 16, 31, -1;
+    add.f32 %f8, %f8, %f12;
+    shfl.sync.bfly.b32 %f12, %f8, 8, 31, -1;
+    add.f32 %f8, %f8, %f12;
+    shfl.sync.bfly.b32 %f12, %f8, 4, 31, -1;
+    add.f32 %f8, %f8, %f12;
+    shfl.sync.bfly.b32 %f12, %f8, 2, 31, -1;
+    add.f32 %f8, %f8, %f12;
+    shfl.sync.bfly.b32 %f12, %f8, 1, 31, -1;
+    add.f32 %f8, %f8, %f12;
+
+    // Normalize and pack eight contiguous FP16 output elements.
+    rcp.approx.f32 %f8, %f8;
+    mul.f32 %f0, %f0, %f8;
+    mul.f32 %f1, %f1, %f8;
+    mul.f32 %f2, %f2, %f8;
+    mul.f32 %f3, %f3, %f8;
+    mul.f32 %f4, %f4, %f8;
+    mul.f32 %f5, %f5, %f8;
+    mul.f32 %f6, %f6, %f8;
+    mul.f32 %f7, %f7, %f8;
+    cvt.rn.f16x2.f32 %r20, %f1, %f0;
+    cvt.rn.f16x2.f32 %r21, %f3, %f2;
+    cvt.rn.f16x2.f32 %r22, %f5, %f4;
+    cvt.rn.f16x2.f32 %r23, %f7, %f6;
+    st.global.v4.b32 [%rd5], {%r20, %r21, %r22, %r23};
+
+    // Continue the grid-stride loop with an exact row-bound check.
+    mov.u32 %r6, %nctaid.x;
+    shl.b32 %r6, %r6, 2;
+    add.u32 %r1, %r1, %r6;
+    setp.lt.u32 %p2, %r1, %r0;
+    @%p2 bra.uni ROW_LOOP;
+DONE:
+    ret;
+}

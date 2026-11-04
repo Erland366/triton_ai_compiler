@@ -1,0 +1,34 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<4>;\n    .reg .b64 %rd<5>;\n    .reg .b16 %h<4>;\n    .reg .f32 %f<18>;\n\n    // Map 128 threads onto adjacent pairs in each 256-element program tile.\n    ld.param.u64 %rd0,[x_ptr];\n    ld.param.u64 %rd1,[output_ptr];\n    mov.u32 %r0,%ctaid.x;\n    mov.u32 %r1,%tid.x;\n    shl.b32 %r0,%r0,8;\n    mad.lo.u32 %r0,%r1,2,%r0;\n    mul.wide.u32 %rd2,%r0,2;\n    add.u64 %rd3,%rd0,%rd2;\n    add.u64 %rd4,%rd1,%rd2;\n\n    // Read two contiguous half values and promote them to float.\n    ld.global.b32 %r2,[%rd3];\n    mov.b32 {%h0,%h1},%r2;\n    cvt.f32.f16 %f0,%h0;\n    cvt.f32.f16 %f10,%h1;\n\n    // Evaluate erf(x/sqrt(2)) using a polynomial times exp(-x*x/2).\n    mul.f32 %f1,%f0,0.7071067811865476;\n    abs.f32 %f2,%f1;\n    fma.rn.f32 %f3,%f2,0.3275911,1.0;\n    rcp.approx.ftz.f32 %f3,%f3;\n    fma.rn.f32 %f4,%f3,1.061405429,-1.453152027;\n    fma.rn.f32 %f4,%f4,%f3,1.421413741;\n    fma.rn.f32 %f4,%f4,%f3,-0.284496736;\n    fma.rn.f32 %f4,%f4,%f3,0.254829592;\n    mul.f32 %f4,%f4,%f3;\n    mul.f32 %f5,%f1,%f1;\n    mul.f32 %f5,%f5,-1.4426950408889634;\n    ex2.approx.ftz.f32 %f5,%f5;\n    neg.f32 %f4,%f4;\n    fma.rn.f32 %f6,%f4,%f5,1.0;\n    copysign.f32 %f6,%f1,%f6;\n\n    // Preserve the GELU multiplication order and round once to half.\n    add.f32 %f6,%f6,1.0;\n    mul.f32 %f7,%f0,0.5;\n    mul.f32 %f7,%f7,%f6;\n    cvt.rn.f16.f32 %h2,%f7;\n\n    // Evaluate the second independent erf with the same float operations.\n    mul.f32 %f11,%f10,0.7071067811865476;\n    abs.f32 %f12,%f11;\n    fma.rn.f32 %f13,%f12,0.3275911,1.0;\n    rcp.approx.ftz.f32 %f13,%f13;\n    fma.rn.f32 %f14,%f13,1.061405429,-1.453152027;\n    fma.rn.f32 %f14,%f14,%f13,1.421413741;\n    fma.rn.f32 %f14,%f14,%f13,-0.284496736;\n    fma.rn.f32 %f14,%f14,%f13,0.254829592;\n    mul.f32 %f14,%f14,%f13;\n    mul.f32 %f15,%f11,%f11;\n    mul.f32 %f15,%f15,-1.4426950408889634;\n    ex2.approx.ftz.f32 %f15,%f15;\n    neg.f32 %f14,%f14;\n    fma.rn.f32 %f16,%f14,%f15,1.0;\n    copysign.f32 %f16,%f11,%f16;\n\n    // Finish GELU for the second value.\n    add.f32 %f16,%f16,1.0;\n    mul.f32 %f17,%f10,0.5;\n    mul.f32 %f17,%f17,%f16;\n    cvt.rn.f16.f32 %h3,%f17;\n\n    // Store the entire tile with packed writes; the source has no mask.\n    mov.b32 %r3,{%h2,%h3};\n    st.global.b32 [%rd4],%r3;\n    ret;\n}",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "The initial Compute Sanitizer run timed out after 120 seconds; verification passed on retry."
+  ],
+  "speedup": 1.0018102774621034,
+  "p50": 0.009192000217735767,
+  "autotune_metrics": {
+    "operator": "GELUFloat16Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 256
+    },
+    "selected_config": {
+      "block_size": 256,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 256,
+        "num_warps": 4
+      },
+      "latency_ms": 0.008840392476198089,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 0.39115900000000003,
+  "max_budget_usd": 1.0
+}

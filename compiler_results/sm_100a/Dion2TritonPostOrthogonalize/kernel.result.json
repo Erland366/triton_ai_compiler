@@ -1,0 +1,65 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_WOyFmHOmQdbtk4H7rLfeKJdo",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.06271935932338238,
+    "triton_p50": 0.06515519961714744,
+    "triton_p80": 0.07273894578218461,
+    "triton_p90": 0.08423494285345078,
+    "triton_p95": 0.08896828846633434,
+    "triton_p99": 0.09388744509220123,
+    "p20": 0.06544691160321235,
+    "p50": 0.06703264065086842,
+    "p80": 0.07507136043906212,
+    "p90": 0.08433612808585167,
+    "p95": 0.0913589122146368,
+    "p99": 0.09590402558147906,
+    "speedup_vs_triton": 0.9719921367338129,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.9275774999999999,
+  "autotune_metrics": {
+    "operator": "Dion2TritonPostOrthogonalize",
+    "constexpr_values": {
+      "x_stride_n": 1,
+      "M": 512,
+      "BLOCK_N": 64,
+      "u_stride_b": 16384,
+      "N": 512,
+      "map_stride_b": 512,
+      "u_stride_n": 1,
+      "BLOCK_M": 64,
+      "SELECT_ROWS": false,
+      "u_stride_m": 32,
+      "x_stride_m": 512,
+      "x_stride_b": 262144
+    },
+    "selected_config": {
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "num_warps": 4
+      },
+      "latency_ms": 0.06800794392587646,
+      "evaluated_configurations": 1,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 0.9719921367338129,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n .param .u64 X_ptr, .param .u64 U_ptr, .param .u64 map_ptr,\n .param .u64 a_ptr, .param .u64 b_ptr,\n .param .u64 dummy_ptr1, .param .u64 dummy_ptr2\n)\n{\n .reg .b32 %r<40>;\n .reg .b64 %rd<20>, %xx<16>, %aa, %bb, %uu0, %uu1;\n .reg .f32 %a, %b, %u<4>;\n // Load tensor bases and decode the batch and 64 by 64 tile.\n ld.param.u64 %rd0, [X_ptr];\n ld.param.u64 %rd1, [U_ptr];\n ld.param.u64 %rd2, [map_ptr];\n mov.u32 %r0, %tid.x;\n mov.u32 %r1, %ctaid.x;\n shr.u32 %r2, %r1, 6;\n shr.u32 %r3, %r1, 3;\n and.b32 %r3, %r3, 7;\n shl.b32 %r3, %r3, 6;\n and.b32 %r4, %r1, 7;\n shl.b32 %r4, %r4, 6;\n // Stage all 64 by 32 U values into exactly 8192 dynamic shared bytes.\n mad.lo.u32 %r7, %r2, 512, %r3;\n shl.b32 %r7, %r7, 7;\n shl.b32 %r8, %r0, 4;\n add.u32 %r7, %r7, %r8;\n cvt.u64.u32 %rd5, %r7;\n add.u64 %rd5, %rd1, %rd5;\n mov.u32 %r9, global_smem;\n shr.u32 %r10, %r0, 3;\n and.b32 %r10, %r10, 7;\n shl.b32 %r10, %r10, 4;\n xor.b32 %r8, %r8, %r10;\n add.u32 %r8, %r8, %r9;\n cp.async.cg.shared.global [%r8], [%rd5], 16;\n add.u32 %r8, %r8, 2048;\n add.u64 %rd5, %rd5, 2048;\n cp.async.cg.shared.global [%r8], [%rd5], 16;\n add.u32 %r8, %r8, 2048;\n add.u64 %rd5, %rd5, 2048;\n cp.async.cg.shared.global [%r8], [%rd5], 16;\n add.u32 %r8, %r8, 2048;\n add.u64 %rd5, %rd5, 2048;\n cp.async.cg.shared.global [%r8], [%rd5], 16;\n cp.async.commit_group;\n // Fetch the live scales and four map entries while U is in flight.\n ld.param.u64 %rd3, [a_ptr];\n ld.param.u64 %rd4, [b_ptr];\n ld.global.f32 %a, [%rd3];\n ld.global.f32 %b, [%rd4];\n neg.f32 %b, %b;\n mov.b64 %aa, {%a, %a};\n mov.b64 %bb, {%b, %b};\n shr.u32 %r5, %r0, 4;\n and.b32 %r6, %r0, 15;\n shl.b32 %r6, %r6, 2;\n add.u32 %r6, %r6, %r4;\n mad.lo.u32 %r7, %r2, 512, %r6;\n mul.wide.u32 %rd6, %r7, 4;\n add.u64 %rd6, %rd2, %rd6;\n ld.global.v4.s32 {%r12, %r13, %r14, %r15}, [%rd6];\n // The source loads U column zero for every negative map value.\n max.s32 %r12, %r12, 0;\n max.s32 %r13, %r13, 0;\n max.s32 %r14, %r14, 0;\n max.s32 %r15, %r15, 0;\n // Swizzle U columns by row to avoid duplicate bank conflicts across rows.\n shl.b32 %r16, %r5, 2;\n xor.b32 %r12, %r12, %r16;\n xor.b32 %r13, %r13, %r16;\n xor.b32 %r14, %r14, %r16;\n xor.b32 %r15, %r15, %r16;\n shl.b32 %r17, %r5, 7;\n add.u32 %r17, %r17, %r9;\n mad.lo.u32 %r12, %r12, 4, %r17;\n mad.lo.u32 %r13, %r13, 4, %r17;\n mad.lo.u32 %r14, %r14, 4, %r17;\n mad.lo.u32 %r15, %r15, 4, %r17;\n // Eight row groups give each thread 32 contiguous-within-row X elements.\n add.u32 %r5, %r5, %r3;\n mad.lo.u32 %r18, %r2, 512, %r5;\n mad.lo.u32 %r18, %r18, 512, %r6;\n mul.wide.u32 %rd7, %r18, 4;\n add.u64 %rd7, %rd0, %rd7;\n ld.global.v2.b64 {%xx0, %xx1}, [%rd7+0];\n ld.global.v2.b64 {%xx2, %xx3}, [%rd7+16384];\n ld.global.v2.b64 {%xx4, %xx5}, [%rd7+32768];\n ld.global.v2.b64 {%xx6, %xx7}, [%rd7+49152];\n ld.global.v2.b64 {%xx8, %xx9}, [%rd7+65536];\n ld.global.v2.b64 {%xx10, %xx11}, [%rd7+81920];\n ld.global.v2.b64 {%xx12, %xx13}, [%rd7+98304];\n ld.global.v2.b64 {%xx14, %xx15}, [%rd7+114688];\n // Complete asynchronous staging and publish it to all four warps.\n cp.async.wait_group 0;\n bar.sync 0;\n // Gather row group 0 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+0];\n ld.shared.f32 %u1, [%r13+0];\n ld.shared.f32 %u2, [%r14+0];\n ld.shared.f32 %u3, [%r15+0];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx0, %aa, %xx0, %uu0;\n fma.rn.f32x2 %xx1, %aa, %xx1, %uu1;\n st.global.v2.b64 [%rd7+0], {%xx0, %xx1};\n // Gather row group 1 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+1024];\n ld.shared.f32 %u1, [%r13+1024];\n ld.shared.f32 %u2, [%r14+1024];\n ld.shared.f32 %u3, [%r15+1024];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx2, %aa, %xx2, %uu0;\n fma.rn.f32x2 %xx3, %aa, %xx3, %uu1;\n st.global.v2.b64 [%rd7+16384], {%xx2, %xx3};\n // Gather row group 2 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+2048];\n ld.shared.f32 %u1, [%r13+2048];\n ld.shared.f32 %u2, [%r14+2048];\n ld.shared.f32 %u3, [%r15+2048];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx4, %aa, %xx4, %uu0;\n fma.rn.f32x2 %xx5, %aa, %xx5, %uu1;\n st.global.v2.b64 [%rd7+32768], {%xx4, %xx5};\n // Gather row group 3 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+3072];\n ld.shared.f32 %u1, [%r13+3072];\n ld.shared.f32 %u2, [%r14+3072];\n ld.shared.f32 %u3, [%r15+3072];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx6, %aa, %xx6, %uu0;\n fma.rn.f32x2 %xx7, %aa, %xx7, %uu1;\n st.global.v2.b64 [%rd7+49152], {%xx6, %xx7};\n // Gather row group 4 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+4096];\n ld.shared.f32 %u1, [%r13+4096];\n ld.shared.f32 %u2, [%r14+4096];\n ld.shared.f32 %u3, [%r15+4096];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx8, %aa, %xx8, %uu0;\n fma.rn.f32x2 %xx9, %aa, %xx9, %uu1;\n st.global.v2.b64 [%rd7+65536], {%xx8, %xx9};\n // Gather row group 5 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+5120];\n ld.shared.f32 %u1, [%r13+5120];\n ld.shared.f32 %u2, [%r14+5120];\n ld.shared.f32 %u3, [%r15+5120];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx10, %aa, %xx10, %uu0;\n fma.rn.f32x2 %xx11, %aa, %xx11, %uu1;\n st.global.v2.b64 [%rd7+81920], {%xx10, %xx11};\n // Gather row group 6 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+6144];\n ld.shared.f32 %u1, [%r13+6144];\n ld.shared.f32 %u2, [%r14+6144];\n ld.shared.f32 %u3, [%r15+6144];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx12, %aa, %xx12, %uu0;\n fma.rn.f32x2 %xx13, %aa, %xx13, %uu1;\n st.global.v2.b64 [%rd7+98304], {%xx12, %xx13};\n // Gather row group 7 and update four elements using paired float32 arithmetic.\n ld.shared.f32 %u0, [%r12+7168];\n ld.shared.f32 %u1, [%r13+7168];\n ld.shared.f32 %u2, [%r14+7168];\n ld.shared.f32 %u3, [%r15+7168];\n mov.b64 %uu0, {%u0, %u1};\n mov.b64 %uu1, {%u2, %u3};\n mul.rn.f32x2 %uu0, %bb, %uu0;\n mul.rn.f32x2 %uu1, %bb, %uu1;\n fma.rn.f32x2 %xx14, %aa, %xx14, %uu0;\n fma.rn.f32x2 %xx15, %aa, %xx15, %uu1;\n st.global.v2.b64 [%rd7+114688], {%xx14, %xx15};\n ret;\n}\n",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

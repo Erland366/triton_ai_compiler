@@ -1,0 +1,232 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 a_ptr,
+    .param .u64 x_ptr,
+    .param .u64 y_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %more, %px, %pv, %even, %store;
+    .reg .b32 %tidx, %pid, %warp, %lane, %wm, %wk, %quad, %row;
+    .reg .b32 %cr, %cc, %copy0, %copy1, %dst0, %dst1, %xcopy, %xdst;
+    .reg .b32 %sm, %buf, %future, %iter, %tmp, %arow, %swz;
+    .reg .b32 %lo<4>, %sa<4>, %xoff, %sx;
+    .reg .b32 %a<32>, %b<16>;
+    .reg .b64 %ap, %xp, %yp, %ga, %gx, %off, %out;
+    .reg .f32 %c<4>, %sum0, %sum1, %v<3>;
+    .reg .b16 %h;
+
+    // Four warps cover 32 rows, with two warp pairs splitting K.
+    ld.param.u64 %ap, [a_ptr];
+    ld.param.u64 %xp, [x_ptr];
+    ld.param.u64 %yp, [y_ptr];
+    mov.u32 %tidx, %tid.x;
+    mov.u32 %pid, %ctaid.x;
+    mov.u32 %sm, global_smem;
+    shr.u32 %warp, %tidx, 5;
+    and.b32 %lane, %tidx, 31;
+    and.b32 %wm, %warp, 1;
+    shl.b32 %wm, %wm, 4;
+    shr.u32 %wk, %warp, 1;
+    and.b32 %quad, %lane, 3;
+    shr.u32 %row, %lane, 2;
+    add.u32 %row, %row, %wm;
+
+    // Stream each 512-column dot as two 256-column subtiles.
+    // A has four 16384-byte stages; x has four 512-byte stages at byte 65536.
+    shr.u32 %cr, %tidx, 5;
+    shl.b32 %cc, %lane, 4;
+    shl.b32 %tmp, %cr, 4;
+    xor.b32 %copy0, %cc, %tmp;
+    mad.lo.u32 %copy0, %cr, 512, %copy0;
+    xor.b32 %copy1, %copy0, 64;
+    add.u32 %copy1, %copy1, 2048;
+    add.u32 %copy0, %copy0, %sm;
+    add.u32 %copy1, %copy1, %sm;
+    mad.lo.u32 %xcopy, %lane, 16, %sm;
+    add.u32 %xcopy, %xcopy, 65536;
+    mad.wide.u32 %ga, %pid, 262144, %ap;
+    mad.wide.u32 %ga, %cr, 8192, %ga;
+    cvt.u64.u32 %off, %cc;
+    add.u64 %ga, %ga, %off;
+    mad.wide.u32 %gx, %lane, 16, %xp;
+    setp.lt.u32 %px, %tidx, 32;
+    mov.pred %pv, %px;
+
+    // Prime three async groups with coalesced, bank-swizzled 16-byte copies.
+    cp.async.cg.shared.global [%copy0], [%ga], 16;
+    cp.async.cg.shared.global [%copy1], [%ga+32768], 16;
+    cp.async.cg.shared.global [%copy0+4096], [%ga+65536], 16;
+    cp.async.cg.shared.global [%copy1+4096], [%ga+98304], 16;
+    cp.async.cg.shared.global [%copy0+8192], [%ga+131072], 16;
+    cp.async.cg.shared.global [%copy1+8192], [%ga+163840], 16;
+    cp.async.cg.shared.global [%copy0+12288], [%ga+196608], 16;
+    cp.async.cg.shared.global [%copy1+12288], [%ga+229376], 16;
+    @%pv cp.async.cg.shared.global [%xcopy], [%gx], 16;
+    cp.async.commit_group;
+
+    cp.async.cg.shared.global [%copy0+16384], [%ga+512], 16;
+    cp.async.cg.shared.global [%copy1+16384], [%ga+33280], 16;
+    cp.async.cg.shared.global [%copy0+20480], [%ga+66048], 16;
+    cp.async.cg.shared.global [%copy1+20480], [%ga+98816], 16;
+    cp.async.cg.shared.global [%copy0+24576], [%ga+131584], 16;
+    cp.async.cg.shared.global [%copy1+24576], [%ga+164352], 16;
+    cp.async.cg.shared.global [%copy0+28672], [%ga+197120], 16;
+    cp.async.cg.shared.global [%copy1+28672], [%ga+229888], 16;
+    @%pv cp.async.cg.shared.global [%xcopy+512], [%gx+512], 16;
+    cp.async.commit_group;
+
+    cp.async.cg.shared.global [%copy0+32768], [%ga+1024], 16;
+    cp.async.cg.shared.global [%copy1+32768], [%ga+33792], 16;
+    cp.async.cg.shared.global [%copy0+36864], [%ga+66560], 16;
+    cp.async.cg.shared.global [%copy1+36864], [%ga+99328], 16;
+    cp.async.cg.shared.global [%copy0+40960], [%ga+132096], 16;
+    cp.async.cg.shared.global [%copy1+40960], [%ga+164864], 16;
+    cp.async.cg.shared.global [%copy0+45056], [%ga+197632], 16;
+    cp.async.cg.shared.global [%copy1+45056], [%ga+230400], 16;
+    @%pv cp.async.cg.shared.global [%xcopy+1024], [%gx+1024], 16;
+    cp.async.commit_group;
+
+    cp.async.wait_group 2;
+    bar.sync 0;
+
+    // Precompute the four ldmatrix row-address patterns for each warp.
+    and.b32 %arow, %lane, 15;
+    add.u32 %arow, %arow, %wm;
+    and.b32 %swz, %arow, 7;
+    shl.b32 %swz, %swz, 4;
+    and.b32 %tmp, %lane, 16;
+    xor.b32 %swz, %swz, %tmp;
+    shl.b32 %arow, %arow, 9;
+    mad.lo.u32 %arow, %wk, 256, %arow;
+    add.u32 %arow, %arow, %sm;
+    add.u32 %lo0, %arow, %swz;
+    xor.b32 %tmp, %swz, 32;
+    add.u32 %lo1, %arow, %tmp;
+    xor.b32 %tmp, %swz, 64;
+    add.u32 %lo2, %arow, %tmp;
+    xor.b32 %tmp, %swz, 96;
+    add.u32 %lo3, %arow, %tmp;
+    mad.lo.u32 %xoff, %wk, 256, %sm;
+    mad.lo.u32 %xoff, %quad, 4, %xoff;
+    add.u32 %xoff, %xoff, 65536;
+    mov.f32 %sum0, 0f00000000;
+    mov.f32 %sum1, 0f00000000;
+    mov.u32 %buf, 0;
+    mov.u32 %iter, 0;
+    add.u64 %ga, %ga, 1536;
+    add.u64 %gx, %gx, 1536;
+
+TILE:
+    // Keep three subtiles in flight while computing the current subtile.
+    add.u32 %future, %buf, 49152;
+    and.b32 %future, %future, 65535;
+    add.u32 %dst0, %copy0, %future;
+    add.u32 %dst1, %copy1, %future;
+    shr.u32 %tmp, %future, 5;
+    add.u32 %xdst, %xcopy, %tmp;
+    setp.lt.u32 %more, %iter, 13;
+    and.pred %pv, %px, %more;
+    @%more cp.async.cg.shared.global [%dst0], [%ga], 16;
+    @%more cp.async.cg.shared.global [%dst1], [%ga+32768], 16;
+    @%more cp.async.cg.shared.global [%dst0+4096], [%ga+65536], 16;
+    @%more cp.async.cg.shared.global [%dst1+4096], [%ga+98304], 16;
+    @%more cp.async.cg.shared.global [%dst0+8192], [%ga+131072], 16;
+    @%more cp.async.cg.shared.global [%dst1+8192], [%ga+163840], 16;
+    @%more cp.async.cg.shared.global [%dst0+12288], [%ga+196608], 16;
+    @%more cp.async.cg.shared.global [%dst1+12288], [%ga+229376], 16;
+    @%pv cp.async.cg.shared.global [%xdst], [%gx], 16;
+    cp.async.commit_group;
+
+    // Start a new FP32 dot only at the first half of a 512-column tile.
+    and.b32 %tmp, %iter, 1;
+    setp.eq.u32 %even, %tmp, 0;
+    @%even mov.f32 %c0, 0f00000000;
+    @%even mov.f32 %c1, 0f00000000;
+    @%even mov.f32 %c2, 0f00000000;
+    @%even mov.f32 %c3, 0f00000000;
+    add.u32 %sa0, %lo0, %buf;
+    add.u32 %sa1, %lo1, %buf;
+    add.u32 %sa2, %lo2, %buf;
+    add.u32 %sa3, %lo3, %buf;
+    shr.u32 %tmp, %buf, 5;
+    add.u32 %sx, %xoff, %tmp;
+
+    // Eight A fragments cover each warp's 16 rows and 128 columns.
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a0,%a1,%a2,%a3}, [%sa0];
+    ld.shared.b32 %b0, [%sx];
+    ld.shared.b32 %b1, [%sx+16];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a4,%a5,%a6,%a7}, [%sa1];
+    ld.shared.b32 %b2, [%sx+32];
+    ld.shared.b32 %b3, [%sx+48];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a8,%a9,%a10,%a11}, [%sa2];
+    ld.shared.b32 %b4, [%sx+64];
+    ld.shared.b32 %b5, [%sx+80];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a12,%a13,%a14,%a15}, [%sa3];
+    ld.shared.b32 %b6, [%sx+96];
+    ld.shared.b32 %b7, [%sx+112];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a16,%a17,%a18,%a19}, [%sa0+128];
+    ld.shared.b32 %b8, [%sx+128];
+    ld.shared.b32 %b9, [%sx+144];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a20,%a21,%a22,%a23}, [%sa1+128];
+    ld.shared.b32 %b10, [%sx+160];
+    ld.shared.b32 %b11, [%sx+176];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a24,%a25,%a26,%a27}, [%sa2+128];
+    ld.shared.b32 %b12, [%sx+192];
+    ld.shared.b32 %b13, [%sx+208];
+    ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%a28,%a29,%a30,%a31}, [%sa3+128];
+    ld.shared.b32 %b14, [%sx+224];
+    ld.shared.b32 %b15, [%sx+240];
+
+    // Replicate x across eight columns and accumulate on FP16 tensor cores.
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a0,%a1,%a2,%a3}, {%b0,%b1}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a4,%a5,%a6,%a7}, {%b2,%b3}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a8,%a9,%a10,%a11}, {%b4,%b5}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a12,%a13,%a14,%a15}, {%b6,%b7}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a16,%a17,%a18,%a19}, {%b8,%b9}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a20,%a21,%a22,%a23}, {%b10,%b11}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a24,%a25,%a26,%a27}, {%b12,%b13}, {%c0,%c1,%c2,%c3};
+    mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32 {%c0,%c1,%c2,%c3}, {%a28,%a29,%a30,%a31}, {%b14,%b15}, {%c0,%c1,%c2,%c3};
+
+    // Add each completed 512-column partial, preserving the eight outer updates.
+    @!%even add.f32 %sum0, %sum0, %c0;
+    @!%even add.f32 %sum1, %sum1, %c2;
+    cp.async.wait_group 2;
+    bar.sync 0;
+    add.u32 %buf, %buf, 16384;
+    and.b32 %buf, %buf, 65535;
+    add.u64 %ga, %ga, 512;
+    add.u64 %gx, %gx, 512;
+    add.u32 %iter, %iter, 1;
+    setp.lt.u32 %more, %iter, 16;
+    @%more bra TILE;
+
+    // Drain the pipeline before reusing the first 256 bytes for split-K sums.
+    cp.async.wait_group 0;
+    mad.lo.u32 %tmp, %wk, 32, %row;
+    mad.lo.u32 %tmp, %tmp, 4, %sm;
+    setp.eq.u32 %store, %quad, 0;
+    @%store st.shared.f32 [%tmp], %sum0;
+    @%store st.shared.f32 [%tmp+32], %sum1;
+    bar.sync 0;
+
+    // All 32 rows are valid; combine the two sums and round once to FP16.
+    setp.lt.u32 %store, %tidx, 32;
+    @!%store bra DONE;
+    mad.lo.u32 %tmp, %tidx, 4, %sm;
+    ld.shared.f32 %v0, [%tmp];
+    ld.shared.f32 %v1, [%tmp+128];
+    add.f32 %v2, %v0, %v1;
+    cvt.rn.f16.f32 %h, %v2;
+    mad.lo.u32 %tmp, %pid, 32, %tidx;
+    mad.wide.u32 %out, %tmp, 2, %yp;
+    st.global.b16 [%out], %h;
+DONE:
+    ret;
+}

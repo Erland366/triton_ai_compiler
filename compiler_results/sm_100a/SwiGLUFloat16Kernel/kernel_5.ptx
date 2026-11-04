@@ -1,0 +1,124 @@
+.version 8.7
+.target sm_100a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 gate_ptr,
+    .param .u64 value_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .b64 %g,%v,%o,%off;
+    .reg .b32 %t,%b,%a<4>,%c<4>,%r<4>;
+    .reg .b16 %h<16>;
+    .reg .f32 %f<8>,%w<8>,%e<8>;
+
+    // Each thread owns eight contiguous elements, covering the full tile.
+    ld.param.u64 %g,[gate_ptr];
+    ld.param.u64 %v,[value_ptr];
+    ld.param.u64 %o,[output_ptr];
+    mov.u32 %t,%tid.x;
+    mov.u32 %b,%ctaid.x;
+    shl.b32 %b,%b,11;
+    mad.lo.u32 %t,%t,16,%b;
+    cvt.u64.u32 %off,%t;
+    add.u64 %g,%g,%off;
+    add.u64 %v,%v,%off;
+    add.u64 %o,%o,%off;
+
+    // Fetch aligned vectors; this exact shape requires no boundary mask.
+    ld.global.v4.b32 {%a0,%a1,%a2,%a3},[%g];
+    ld.global.v4.b32 {%c0,%c1,%c2,%c3},[%v];
+
+    // Unpack half inputs and promote all arithmetic to float32.
+    mov.b32 {%h0,%h1},%a0;
+    mov.b32 {%h2,%h3},%a1;
+    mov.b32 {%h4,%h5},%a2;
+    mov.b32 {%h6,%h7},%a3;
+    mov.b32 {%h8,%h9},%c0;
+    mov.b32 {%h10,%h11},%c1;
+    mov.b32 {%h12,%h13},%c2;
+    mov.b32 {%h14,%h15},%c3;
+    cvt.f32.f16 %f0,%h0;
+    cvt.f32.f16 %f1,%h1;
+    cvt.f32.f16 %f2,%h2;
+    cvt.f32.f16 %f3,%h3;
+    cvt.f32.f16 %f4,%h4;
+    cvt.f32.f16 %f5,%h5;
+    cvt.f32.f16 %f6,%h6;
+    cvt.f32.f16 %f7,%h7;
+    cvt.f32.f16 %w0,%h8;
+    cvt.f32.f16 %w1,%h9;
+    cvt.f32.f16 %w2,%h10;
+    cvt.f32.f16 %w3,%h11;
+    cvt.f32.f16 %w4,%h12;
+    cvt.f32.f16 %w5,%h13;
+    cvt.f32.f16 %w6,%h14;
+    cvt.f32.f16 %w7,%h15;
+
+    // Compute exp(-gate) using the base-two exponential unit.
+    mul.f32 %e0,%f0,0fBFB8AA3B;
+    mul.f32 %e1,%f1,0fBFB8AA3B;
+    mul.f32 %e2,%f2,0fBFB8AA3B;
+    mul.f32 %e3,%f3,0fBFB8AA3B;
+    mul.f32 %e4,%f4,0fBFB8AA3B;
+    mul.f32 %e5,%f5,0fBFB8AA3B;
+    mul.f32 %e6,%f6,0fBFB8AA3B;
+    mul.f32 %e7,%f7,0fBFB8AA3B;
+    ex2.approx.f32 %e0,%e0;
+    ex2.approx.f32 %e1,%e1;
+    ex2.approx.f32 %e2,%e2;
+    ex2.approx.f32 %e3,%e3;
+    ex2.approx.f32 %e4,%e4;
+    ex2.approx.f32 %e5,%e5;
+    ex2.approx.f32 %e6,%e6;
+    ex2.approx.f32 %e7,%e7;
+
+    // Form the sigmoid denominator and take its reciprocal.
+    add.f32 %e0,%e0,0f3F800000;
+    add.f32 %e1,%e1,0f3F800000;
+    add.f32 %e2,%e2,0f3F800000;
+    add.f32 %e3,%e3,0f3F800000;
+    add.f32 %e4,%e4,0f3F800000;
+    add.f32 %e5,%e5,0f3F800000;
+    add.f32 %e6,%e6,0f3F800000;
+    add.f32 %e7,%e7,0f3F800000;
+    rcp.approx.f32 %e0,%e0;
+    rcp.approx.f32 %e1,%e1;
+    rcp.approx.f32 %e2,%e2;
+    rcp.approx.f32 %e3,%e3;
+    rcp.approx.f32 %e4,%e4;
+    rcp.approx.f32 %e5,%e5;
+    rcp.approx.f32 %e6,%e6;
+    rcp.approx.f32 %e7,%e7;
+
+    // Apply the gate and then the value, preserving operation order.
+    mul.f32 %f0,%f0,%e0;
+    mul.f32 %f1,%f1,%e1;
+    mul.f32 %f2,%f2,%e2;
+    mul.f32 %f3,%f3,%e3;
+    mul.f32 %f4,%f4,%e4;
+    mul.f32 %f5,%f5,%e5;
+    mul.f32 %f6,%f6,%e6;
+    mul.f32 %f7,%f7,%e7;
+    mul.f32 %f0,%f0,%w0;
+    mul.f32 %f1,%f1,%w1;
+    mul.f32 %f2,%f2,%w2;
+    mul.f32 %f3,%f3,%w3;
+    mul.f32 %f4,%f4,%w4;
+    mul.f32 %f5,%f5,%w5;
+    mul.f32 %f6,%f6,%w6;
+    mul.f32 %f7,%f7,%w7;
+
+    // Round and pack pairs, then issue one vector store per thread.
+    cvt.rn.f16x2.f32 %r0,%f1,%f0;
+    cvt.rn.f16x2.f32 %r1,%f3,%f2;
+    cvt.rn.f16x2.f32 %r2,%f5,%f4;
+    cvt.rn.f16x2.f32 %r3,%f7,%f6;
+    st.global.v4.b32 [%o],{%r0,%r1,%r2,%r3};
+    ret;
+}

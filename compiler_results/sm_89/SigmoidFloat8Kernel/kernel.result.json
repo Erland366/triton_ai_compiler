@@ -1,0 +1,434 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_m5OFjfmtwrrWl1iHxWkYiaJe",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.006847872098907829,
+    "triton_p50": 0.0071680000983178616,
+    "triton_p80": 0.007176192086189985,
+    "triton_p90": 0.007873919988051058,
+    "triton_p95": 0.008189503978937864,
+    "triton_p99": 0.008191999979317188,
+    "p20": 0.006597120147198439,
+    "p50": 0.0071680000983178616,
+    "p80": 0.007276928093284368,
+    "p90": 0.0076300160037353635,
+    "p95": 0.008187359981238842,
+    "p99": 0.008191999979317188,
+    "speedup_vs_triton": 1.0,
+    "passed": true,
+    "summary": {
+      "hardware": {
+        "display_name": "NVIDIA L40S",
+        "compute_capability": 8.9,
+        "sm_count": 142,
+        "warp_size": 32,
+        "l2_cache_bytes": 100663296,
+        "max_warps_per_sm": 48,
+        "sm_version": "sm_89"
+      },
+      "kernel": {
+        "name": "kernel",
+        "grid_dim_x": 512,
+        "grid_dim_y": 1,
+        "grid_dim_z": 1,
+        "block_dim_x": 512,
+        "block_dim_y": 1,
+        "block_dim_z": 1,
+        "shared_memory_static_bytes": {
+          "value": 0,
+          "unit": "byte/block"
+        },
+        "shared_memory_dynamic_bytes": {
+          "value": 0,
+          "unit": "byte/block"
+        },
+        "registers_per_thread": {
+          "value": 16,
+          "unit": "register/thread"
+        },
+        "execution_time": {
+          "value": 5120,
+          "unit": "ns"
+        }
+      },
+      "occupancy": {
+        "achieved_pct": {
+          "value": 71.19,
+          "unit": "%"
+        },
+        "waves_per_sm": 1.2,
+        "limit_blocks": {
+          "value": 24,
+          "unit": "block"
+        },
+        "limit_registers": {
+          "value": 8,
+          "unit": "block"
+        },
+        "limit_shared_memory": {
+          "value": 8,
+          "unit": "block"
+        },
+        "limit_warps": {
+          "value": 3,
+          "unit": "block"
+        },
+        "primary_limit": "warps",
+        "theoretical_pct": 100.0
+      },
+      "scheduler": {
+        "issue_slot_utilization_pct": {
+          "value": 22.29,
+          "unit": "%"
+        },
+        "eligible_warps_per_cycle": {
+          "value": 0.41,
+          "unit": "warp"
+        },
+        "active_warps_per_cycle": {
+          "value": 8.89,
+          "unit": "warp"
+        }
+      },
+      "memory": {
+        "l2_throughput_pct": {
+          "value": 23.01,
+          "unit": "%"
+        },
+        "l1_throughput_pct": {
+          "value": 18.65,
+          "unit": "%"
+        },
+        "l1_hit_rate_pct": {
+          "value": 0,
+          "unit": "%"
+        },
+        "l2_hit_rate_pct": {
+          "value": 68,
+          "unit": "%"
+        },
+        "dram_bytes_read": {
+          "value": 1150592,
+          "unit": "byte"
+        },
+        "dram_bytes_write": {
+          "value": 0,
+          "unit": "byte"
+        },
+        "global_load_requests": 8192,
+        "global_store_requests": 8192,
+        "global_load_sectors": {
+          "value": 32768,
+          "unit": "sector"
+        },
+        "global_load_transactions": {
+          "value": 32768,
+          "unit": "sector"
+        },
+        "global_store_sectors": {
+          "value": 65536,
+          "unit": "sector"
+        },
+        "global_store_transactions": {
+          "value": 65536,
+          "unit": "sector"
+        },
+        "l1_read_sectors": {
+          "value": 32768,
+          "unit": "sector"
+        },
+        "l1_write_sectors": {
+          "value": 65536,
+          "unit": "sector"
+        },
+        "shared_load_wavefronts": 0,
+        "shared_load_transactions": 0,
+        "shared_store_wavefronts": 0,
+        "shared_store_transactions": 0,
+        "shared_load_excessive_wavefronts": 0,
+        "shared_store_excessive_wavefronts": 0,
+        "shared_bank_conflicts": 0,
+        "global_load_sectors_per_request": 4.0,
+        "global_store_sectors_per_request": 8.0,
+        "l1_bytes_read": 1048576,
+        "l1_bytes_write": 2097152
+      },
+      "instructions": {
+        "ipc": {
+          "value": 0.75,
+          "unit": "inst/cycle"
+        },
+        "executed": {
+          "value": 294912,
+          "unit": "inst"
+        }
+      },
+      "roofline": {
+        "memory_peak_pct": {
+          "value": 26.5,
+          "unit": "%"
+        },
+        "compute_peak_pct": {
+          "value": 17.23,
+          "unit": "%"
+        }
+      }
+    },
+    "ncu_line_by_line": [
+      {
+        "rank": 1,
+        "instruction": "cvt.rn.f16x2.e4m3x2 %hp0, %q0;",
+        "lines": [
+          33
+        ],
+        "total_stall_samples": 156.0,
+        "stall_breakdown": {
+          "long_scoreboard": 156.0
+        }
+      },
+      {
+        "rank": 2,
+        "instruction": "ld.param.u64 %x, [x_ptr];",
+        "lines": [
+          20
+        ],
+        "total_stall_samples": 49.0,
+        "stall_breakdown": {
+          "imc": 39.0,
+          "no_inst": 10.0
+        }
+      },
+      {
+        "rank": 3,
+        "instruction": "add.u64 %ax, %x, %ix;",
+        "lines": [
+          27
+        ],
+        "total_stall_samples": 40.0,
+        "stall_breakdown": {
+          "imc": 39.0,
+          "no_inst": 1.0
+        }
+      },
+      {
+        "rank": 4,
+        "instruction": "ret;",
+        "lines": [
+          64
+        ],
+        "total_stall_samples": 29.0,
+        "stall_breakdown": {
+          "branch_resolving": 7.0,
+          "drain": 21.0,
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 5,
+        "instruction": "rcp.approx.ftz.f32 %f2, %f2;",
+        "lines": [
+          57
+        ],
+        "total_stall_samples": 9.0,
+        "stall_breakdown": {
+          "mio": 4.0,
+          "wait": 5.0
+        }
+      },
+      {
+        "rank": 6,
+        "instruction": "cvt.rn.f16x2.f32 %out1, %f3, %f2;",
+        "lines": [
+          62
+        ],
+        "total_stall_samples": 7.0,
+        "stall_breakdown": {
+          "short_scoreboard": 7.0
+        }
+      },
+      {
+        "rank": 7,
+        "instruction": "rcp.approx.ftz.f32 %f0, %f0;",
+        "lines": [
+          55
+        ],
+        "total_stall_samples": 6.0,
+        "stall_breakdown": {
+          "mio": 5.0,
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 8,
+        "instruction": "ex2.approx.ftz.f32 %f1, %f1;",
+        "lines": [
+          48
+        ],
+        "total_stall_samples": 5.0,
+        "stall_breakdown": {
+          "mio": 4.0,
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 9,
+        "instruction": "ex2.approx.ftz.f32 %f3, %f3;",
+        "lines": [
+          50
+        ],
+        "total_stall_samples": 5.0,
+        "stall_breakdown": {
+          "mio": 4.0,
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 10,
+        "instruction": "ex2.approx.ftz.f32 %f2, %f2;",
+        "lines": [
+          49
+        ],
+        "total_stall_samples": 3.0,
+        "stall_breakdown": {
+          "mio": 3.0
+        }
+      },
+      {
+        "rank": 11,
+        "instruction": "add.f32 %f1, %f1, 0f3F800000;",
+        "lines": [
+          52
+        ],
+        "total_stall_samples": 3.0,
+        "stall_breakdown": {
+          "short_scoreboard": 3.0
+        }
+      },
+      {
+        "rank": 12,
+        "instruction": "rcp.approx.ftz.f32 %f1, %f1;",
+        "lines": [
+          56
+        ],
+        "total_stall_samples": 3.0,
+        "stall_breakdown": {
+          "mio": 2.0,
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 13,
+        "instruction": "rcp.approx.ftz.f32 %f3, %f3;",
+        "lines": [
+          58
+        ],
+        "total_stall_samples": 2.0,
+        "stall_breakdown": {
+          "wait": 2.0
+        }
+      },
+      {
+        "rank": 14,
+        "instruction": "st.global.v2.b32 [%ay], {%out0, %out1};",
+        "lines": [
+          63
+        ],
+        "total_stall_samples": 2.0,
+        "stall_breakdown": {
+          "wait": 2.0
+        }
+      },
+      {
+        "rank": 15,
+        "instruction": "cvt.f32.f16 %f0, %h0;",
+        "lines": [
+          37
+        ],
+        "total_stall_samples": 1.0,
+        "stall_breakdown": {
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 16,
+        "instruction": "mul.f32 %f1, %f1, 0fBFB8AA3B;",
+        "lines": [
+          44
+        ],
+        "total_stall_samples": 1.0,
+        "stall_breakdown": {
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 17,
+        "instruction": "mul.f32 %f3, %f3, 0fBFB8AA3B;",
+        "lines": [
+          46
+        ],
+        "total_stall_samples": 1.0,
+        "stall_breakdown": {
+          "wait": 1.0
+        }
+      },
+      {
+        "rank": 18,
+        "instruction": "add.f32 %f3, %f3, 0f3F800000;",
+        "lines": [
+          54
+        ],
+        "total_stall_samples": 1.0,
+        "stall_breakdown": {
+          "short_scoreboard": 1.0
+        }
+      },
+      {
+        "rank": 19,
+        "instruction": "cvt.rn.f16x2.f32 %out0, %f1, %f0;",
+        "lines": [
+          61
+        ],
+        "total_stall_samples": 1.0,
+        "stall_breakdown": {
+          "short_scoreboard": 1.0
+        }
+      }
+    ]
+  },
+  "run_cost_usd_so_far": 4.442048,
+  "autotune_metrics": {
+    "operator": "SigmoidFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 16
+      },
+      "latency_ms": 0.006952324834037091,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.0,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %t, %b, %i, %raw, %hp0, %hp1, %out0, %out1;\n    .reg .b64 %x, %y, %ix, %iy, %ax, %ay;\n    .reg .b16 %q0, %q1, %h0, %h1, %h2, %h3;\n    .reg .f32 %f0, %f1, %f2, %f3;\n\n    // Index four-element groups: 512 threads cover each 2048-element tile.\n    ld.param.u64 %x, [x_ptr];\n    ld.param.u64 %y, [output_ptr];\n    mov.u32 %t, %tid.x;\n    mov.u32 %b, %ctaid.x;\n    mad.lo.u32 %i, %b, 512, %t;\n    mul.wide.u32 %ix, %i, 4;\n    mul.wide.u32 %iy, %i, 8;\n    add.u64 %ax, %x, %ix;\n    add.u64 %ay, %y, %iy;\n\n    // Load four FP8 values without L1 allocation and convert the pairs exactly.\n    ld.global.cg.b32 %raw, [%ax];\n    mov.b32 {%q0, %q1}, %raw;\n    cvt.rn.f16x2.e4m3x2 %hp0, %q0;\n    cvt.rn.f16x2.e4m3x2 %hp1, %q1;\n    mov.b32 {%h0, %h1}, %hp0;\n    mov.b32 {%h2, %h3}, %hp1;\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n\n    // Evaluate sigmoid in float; float subnormals cannot affect half rounding.\n    mul.f32 %f0, %f0, 0fBFB8AA3B;\n    mul.f32 %f1, %f1, 0fBFB8AA3B;\n    mul.f32 %f2, %f2, 0fBFB8AA3B;\n    mul.f32 %f3, %f3, 0fBFB8AA3B;\n    ex2.approx.ftz.f32 %f0, %f0;\n    ex2.approx.ftz.f32 %f1, %f1;\n    ex2.approx.ftz.f32 %f2, %f2;\n    ex2.approx.ftz.f32 %f3, %f3;\n    add.f32 %f0, %f0, 0f3F800000;\n    add.f32 %f1, %f1, 0f3F800000;\n    add.f32 %f2, %f2, 0f3F800000;\n    add.f32 %f3, %f3, 0f3F800000;\n    rcp.approx.ftz.f32 %f0, %f0;\n    rcp.approx.ftz.f32 %f1, %f1;\n    rcp.approx.ftz.f32 %f2, %f2;\n    rcp.approx.ftz.f32 %f3, %f3;\n\n    // Round to half and issue one aligned, coalesced 64-bit output store.\n    cvt.rn.f16x2.f32 %out0, %f1, %f0;\n    cvt.rn.f16x2.f32 %out1, %f3, %f2;\n    st.global.v2.b32 [%ay], {%out0, %out1};\n    ret;\n}\n",
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

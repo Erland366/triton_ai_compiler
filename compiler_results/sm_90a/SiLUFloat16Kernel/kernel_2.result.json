@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_rY46yiM2mjcKfLpWtSku7w4B",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.006947456073015929,
+    "triton_p50": 0.007122560013085604,
+    "triton_p80": 0.007300736043602228,
+    "triton_p90": 0.007414400093257428,
+    "triton_p95": 0.007563903986476361,
+    "triton_p99": 0.008310175932012498,
+    "p20": 0.006949120052158832,
+    "p50": 0.0071206400264054535,
+    "p80": 0.007293440047651529,
+    "p90": 0.007405440090224147,
+    "p95": 0.007552640009671449,
+    "p99": 0.008321196675114334,
+    "speedup_vs_triton": 1.000269636812566,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.3587285,
+  "autotune_metrics": {
+    "operator": "SiLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 2048
+    },
+    "selected_config": {
+      "block_size": 2048,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 2048,
+        "num_warps": 4
+      },
+      "latency_ms": 0.006951579322870676,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 1.000269636812566,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(.param .u64 x_ptr,.param .u64 output_ptr,.param .u64 dummy_ptr1,.param .u64 dummy_ptr2)\n{\n.reg .u64 %x,%y,%a,%b,%off;\n.reg .u32 %t,%c,%i;\n.reg .b32 %v<8>,%o<8>;\n.reg .b16 %h<16>;\n.reg .f32 %f<16>,%e<16>;\n// Each lane owns eight adjacent halves in each of two 1024-element stripes.\nld.param.u64 %x,[x_ptr];\nld.param.u64 %y,[output_ptr];\nmov.u32 %t,%tid.x;\nmov.u32 %c,%ctaid.x;\nshl.b32 %i,%c,12;\nmad.lo.u32 %i,%t,16,%i;\ncvt.u64.u32 %off,%i;\nadd.u64 %a,%x,%off;\nadd.u64 %b,%y,%off;\n// Load both aligned vectors; the fixed tile requires no masks.\nld.global.v4.b32 {%v0,%v1,%v2,%v3},[%a];\nld.global.v4.b32 {%v4,%v5,%v6,%v7},[%a+2048];\n// Unpack the half values and convert to float32.\nmov.b32 {%h0,%h1},%v0;\nmov.b32 {%h2,%h3},%v1;\nmov.b32 {%h4,%h5},%v2;\nmov.b32 {%h6,%h7},%v3;\nmov.b32 {%h8,%h9},%v4;\nmov.b32 {%h10,%h11},%v5;\nmov.b32 {%h12,%h13},%v6;\nmov.b32 {%h14,%h15},%v7;\ncvt.f32.f16 %f0,%h0;\ncvt.f32.f16 %f1,%h1;\ncvt.f32.f16 %f2,%h2;\ncvt.f32.f16 %f3,%h3;\ncvt.f32.f16 %f4,%h4;\ncvt.f32.f16 %f5,%h5;\ncvt.f32.f16 %f6,%h6;\ncvt.f32.f16 %f7,%h7;\ncvt.f32.f16 %f8,%h8;\ncvt.f32.f16 %f9,%h9;\ncvt.f32.f16 %f10,%h10;\ncvt.f32.f16 %f11,%h11;\ncvt.f32.f16 %f12,%h12;\ncvt.f32.f16 %f13,%h13;\ncvt.f32.f16 %f14,%h14;\ncvt.f32.f16 %f15,%h15;\n// Scale by -log2(e) to evaluate exp(-x) with the base-two exponential.\nmul.f32 %e0,%f0,0fBFB8AA3B;\nmul.f32 %e1,%f1,0fBFB8AA3B;\nmul.f32 %e2,%f2,0fBFB8AA3B;\nmul.f32 %e3,%f3,0fBFB8AA3B;\nmul.f32 %e4,%f4,0fBFB8AA3B;\nmul.f32 %e5,%f5,0fBFB8AA3B;\nmul.f32 %e6,%f6,0fBFB8AA3B;\nmul.f32 %e7,%f7,0fBFB8AA3B;\nmul.f32 %e8,%f8,0fBFB8AA3B;\nmul.f32 %e9,%f9,0fBFB8AA3B;\nmul.f32 %e10,%f10,0fBFB8AA3B;\nmul.f32 %e11,%f11,0fBFB8AA3B;\nmul.f32 %e12,%f12,0fBFB8AA3B;\nmul.f32 %e13,%f13,0fBFB8AA3B;\nmul.f32 %e14,%f14,0fBFB8AA3B;\nmul.f32 %e15,%f15,0fBFB8AA3B;\nex2.approx.f32 %e0,%e0;\nex2.approx.f32 %e1,%e1;\nex2.approx.f32 %e2,%e2;\nex2.approx.f32 %e3,%e3;\nex2.approx.f32 %e4,%e4;\nex2.approx.f32 %e5,%e5;\nex2.approx.f32 %e6,%e6;\nex2.approx.f32 %e7,%e7;\nex2.approx.f32 %e8,%e8;\nex2.approx.f32 %e9,%e9;\nex2.approx.f32 %e10,%e10;\nex2.approx.f32 %e11,%e11;\nex2.approx.f32 %e12,%e12;\nex2.approx.f32 %e13,%e13;\nex2.approx.f32 %e14,%e14;\nex2.approx.f32 %e15,%e15;\n// Form 1 + exp(-x) in float32.\nadd.f32 %e0,%e0,0f3F800000;\nadd.f32 %e1,%e1,0f3F800000;\nadd.f32 %e2,%e2,0f3F800000;\nadd.f32 %e3,%e3,0f3F800000;\nadd.f32 %e4,%e4,0f3F800000;\nadd.f32 %e5,%e5,0f3F800000;\nadd.f32 %e6,%e6,0f3F800000;\nadd.f32 %e7,%e7,0f3F800000;\nadd.f32 %e8,%e8,0f3F800000;\nadd.f32 %e9,%e9,0f3F800000;\nadd.f32 %e10,%e10,0f3F800000;\nadd.f32 %e11,%e11,0f3F800000;\nadd.f32 %e12,%e12,0f3F800000;\nadd.f32 %e13,%e13,0f3F800000;\nadd.f32 %e14,%e14,0f3F800000;\nadd.f32 %e15,%e15,0f3F800000;\n// Take reciprocal denominators for the float32 division.\nrcp.approx.f32 %e0,%e0;\nrcp.approx.f32 %e1,%e1;\nrcp.approx.f32 %e2,%e2;\nrcp.approx.f32 %e3,%e3;\nrcp.approx.f32 %e4,%e4;\nrcp.approx.f32 %e5,%e5;\nrcp.approx.f32 %e6,%e6;\nrcp.approx.f32 %e7,%e7;\nrcp.approx.f32 %e8,%e8;\nrcp.approx.f32 %e9,%e9;\nrcp.approx.f32 %e10,%e10;\nrcp.approx.f32 %e11,%e11;\nrcp.approx.f32 %e12,%e12;\nrcp.approx.f32 %e13,%e13;\nrcp.approx.f32 %e14,%e14;\nrcp.approx.f32 %e15,%e15;\n// Multiply by the original values to obtain SiLU.\nmul.f32 %f0,%f0,%e0;\nmul.f32 %f1,%f1,%e1;\nmul.f32 %f2,%f2,%e2;\nmul.f32 %f3,%f3,%e3;\nmul.f32 %f4,%f4,%e4;\nmul.f32 %f5,%f5,%e5;\nmul.f32 %f6,%f6,%e6;\nmul.f32 %f7,%f7,%e7;\nmul.f32 %f8,%f8,%e8;\nmul.f32 %f9,%f9,%e9;\nmul.f32 %f10,%f10,%e10;\nmul.f32 %f11,%f11,%e11;\nmul.f32 %f12,%f12,%e12;\nmul.f32 %f13,%f13,%e13;\nmul.f32 %f14,%f14,%e14;\nmul.f32 %f15,%f15,%e15;\n// Round to half precision and pack adjacent values for vector stores.\ncvt.rn.f16x2.f32 %o0,%f1,%f0;\ncvt.rn.f16x2.f32 %o1,%f3,%f2;\ncvt.rn.f16x2.f32 %o2,%f5,%f4;\ncvt.rn.f16x2.f32 %o3,%f7,%f6;\ncvt.rn.f16x2.f32 %o4,%f9,%f8;\ncvt.rn.f16x2.f32 %o5,%f11,%f10;\ncvt.rn.f16x2.f32 %o6,%f13,%f12;\ncvt.rn.f16x2.f32 %o7,%f15,%f14;\n// Store both stripes, covering exactly 2048 elements per CTA.\nst.global.v4.b32 [%b],{%o0,%o1,%o2,%o3};\nst.global.v4.b32 [%b+2048],{%o4,%o5,%o6,%o7};\nret;\n}",
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 128,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

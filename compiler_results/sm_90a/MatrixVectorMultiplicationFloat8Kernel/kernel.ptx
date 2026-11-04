@@ -1,0 +1,206 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 a_ptr,
+    .param .u64 x_ptr,
+    .param .u64 y_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<12>;
+    .reg .b32 %r<40>;
+    .reg .b64 %rd<16>;
+    .reg .f32 %c<4>, %d<4>, %v<4>, %f<5>, %acc<2>;
+    .reg .b16 %h;
+
+    // Split K across two sets of 32 tensor-core rows within one warpgroup.
+    ld.param.u64 %rd0, [a_ptr];
+    ld.param.u64 %rd1, [x_ptr];
+    ld.param.u64 %rd2, [y_ptr];
+    mov.u32 %r0, %tid.x;
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, global_smem;
+    shl.b32 %r3, %r1, 5;
+    shr.u32 %r4, %r0, 3;
+    and.b32 %r5, %r0, 7;
+    shl.b32 %r5, %r5, 4;
+    add.u32 %r6, %r3, %r4;
+    mad.lo.u32 %r6, %r6, 4096, %r5;
+    cvt.u64.u32 %rd3, %r6;
+    add.u64 %rd3, %rd0, %rd3;
+
+    // Both operands use 128-byte swizzled atoms, each containing eight rows.
+    and.b32 %r7, %r4, 7;
+    shl.b32 %r7, %r7, 4;
+    xor.b32 %r7, %r7, %r5;
+    mad.lo.u32 %r7, %r4, 128, %r7;
+    shr.u32 %r8, %r0, 4;
+    and.b32 %r9, %r0, 15;
+    shl.b32 %r9, %r9, 4;
+    shr.u32 %r10, %r8, 2;
+    mad.lo.u32 %r10, %r10, 2048, %r9;
+    cvt.u64.u32 %rd4, %r10;
+    add.u64 %rd4, %rd1, %rd4;
+    and.b32 %r11, %r9, 127;
+    shl.b32 %r12, %r8, 4;
+    xor.b32 %r11, %r11, %r12;
+    mad.lo.u32 %r11, %r8, 128, %r11;
+    shr.u32 %r12, %r9, 7;
+    mad.lo.u32 %r11, %r12, 1024, %r11;
+    add.u32 %r11, %r11, 16384;
+
+    // Initialize copy and compute positions in the three-buffer ring.
+    mov.u32 %r13, 0;
+    mov.u32 %r14, 0;
+    mov.u32 %r34, 0;
+    mov.u32 %r35, 0;
+    mov.f32 %acc0, 0f00000000;
+    mov.f32 %acc1, 0f00000000;
+
+COPY_STAGE:
+    // Three 18432-byte buffers use 55296 bytes of the supplied shared memory.
+    add.u32 %r16, %r34, %r2;
+    add.u32 %r17, %r16, %r7;
+    add.u32 %r18, %r16, %r11;
+    shl.b32 %r19, %r13, 8;
+    cvt.u64.u32 %rd5, %r19;
+    add.u64 %rd6, %rd3, %rd5;
+    add.u64 %rd7, %rd4, %rd5;
+    cp.async.cg.shared.global [%r17+0], [%rd6+0], 16;
+    cp.async.cg.shared.global [%r17+2048], [%rd6+65536], 16;
+    cp.async.cg.shared.global [%r17+4096], [%rd6+2048], 16;
+    cp.async.cg.shared.global [%r17+6144], [%rd6+67584], 16;
+    cp.async.cg.shared.global [%r17+8192], [%rd6+128], 16;
+    cp.async.cg.shared.global [%r17+10240], [%rd6+65664], 16;
+    cp.async.cg.shared.global [%r17+12288], [%rd6+2176], 16;
+    cp.async.cg.shared.global [%r17+14336], [%rd6+67712], 16;
+    cp.async.cg.shared.global [%r18], [%rd7], 16;
+    cp.async.commit_group;
+
+    // Advance the producer, initially filling all three buffers.
+    add.u32 %r34, %r34, 18432;
+    setp.eq.u32 %p8, %r34, 55296;
+    @%p8 mov.u32 %r34, 0;
+    add.u32 %r13, %r13, 1;
+    setp.lt.u32 %p0, %r13, 3;
+    @%p0 bra COPY_STAGE;
+
+COMPUTE_STAGE:
+    // Publish the completed copy to the asynchronous tensor-core proxy.
+    setp.lt.u32 %p1, %r14, 6;
+    setp.eq.u32 %p9, %r14, 6;
+    setp.eq.u32 %p10, %r14, 7;
+    @%p1 cp.async.wait_group 2;
+    @%p9 cp.async.wait_group 1;
+    @%p10 cp.async.wait_group 0;
+    bar.sync 0;
+    fence.proxy.async.shared::cta;
+    add.u32 %r21, %r35, %r2;
+    shr.u32 %r22, %r21, 4;
+    cvt.u64.u32 %rd8, %r22;
+
+    // Descriptors encode 128B swizzling and a 1024-byte eight-row stride.
+    or.b64 %rd8, %rd8, 0x4000004000010000;
+    add.u64 %rd9, %rd8, 1024;
+    and.b32 %r23, %r14, 3;
+    setp.ne.u32 %p2, %r23, 0;
+    wgmma.fence.sync.aligned;
+
+    // Bound each native FP8 accumulation chain to 128 columns.
+    add.u64 %rd10, %rd8, 0;
+    add.u64 %rd11, %rd9, 0;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%c0,%c1,%c2,%c3}, %rd10, %rd11, 0, 1, 1;
+    add.u64 %rd10, %rd8, 2;
+    add.u64 %rd11, %rd9, 2;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%c0,%c1,%c2,%c3}, %rd10, %rd11, 1, 1, 1;
+    add.u64 %rd10, %rd8, 4;
+    add.u64 %rd11, %rd9, 4;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%c0,%c1,%c2,%c3}, %rd10, %rd11, 1, 1, 1;
+    add.u64 %rd10, %rd8, 6;
+    add.u64 %rd11, %rd9, 6;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%c0,%c1,%c2,%c3}, %rd10, %rd11, 1, 1, 1;
+
+    // Compute the second 128-column slab with an independent accumulator.
+    add.u64 %rd10, %rd8, 512;
+    add.u64 %rd11, %rd9, 64;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%d0,%d1,%d2,%d3}, %rd10, %rd11, 0, 1, 1;
+    add.u64 %rd10, %rd8, 514;
+    add.u64 %rd11, %rd9, 66;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%d0,%d1,%d2,%d3}, %rd10, %rd11, 1, 1, 1;
+    add.u64 %rd10, %rd8, 516;
+    add.u64 %rd11, %rd9, 68;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%d0,%d1,%d2,%d3}, %rd10, %rd11, 1, 1, 1;
+    add.u64 %rd10, %rd8, 518;
+    add.u64 %rd11, %rd9, 70;
+    wgmma.mma_async.sync.aligned.m64n8k32.f32.e4m3.e4m3 {%d0,%d1,%d2,%d3}, %rd10, %rd11, 1, 1, 1;
+    wgmma.commit_group.sync.aligned;
+    wgmma.wait_group.sync.aligned 0;
+
+    // Sum short native results in FP32, retaining the 1024-column boundaries.
+    @!%p2 mov.f32 %acc0, 0f00000000;
+    @!%p2 mov.f32 %acc1, 0f00000000;
+    add.f32 %f0, %c0, %d0;
+    add.f32 %f1, %c2, %d2;
+    add.f32 %acc0, %acc0, %f0;
+    add.f32 %acc1, %acc1, %f1;
+    setp.eq.u32 %p3, %r14, 3;
+    @%p3 mov.f32 %v0, %acc0;
+    @%p3 mov.f32 %v2, %acc1;
+    bar.sync 0;
+
+    // Release the consumed buffer and finish all eight 256-column stages.
+    add.u32 %r35, %r35, 18432;
+    setp.eq.u32 %p8, %r35, 55296;
+    @%p8 mov.u32 %r35, 0;
+    add.u32 %r14, %r14, 1;
+    setp.eq.u32 %p4, %r14, 8;
+    @%p4 bra REDUCE;
+    setp.lt.u32 %p5, %r13, 8;
+    @%p5 bra COPY_STAGE;
+    bra COMPUTE_STAGE;
+
+REDUCE:
+    // Select column zero for K<2048 and column four for K>=2048.
+    shr.u32 %r24, %r0, 5;
+    and.b32 %r25, %r0, 31;
+    shr.u32 %r26, %r25, 2;
+    and.b32 %r27, %r25, 3;
+    shr.u32 %r28, %r24, 1;
+    shl.b32 %r29, %r28, 1;
+    setp.eq.u32 %p6, %r27, %r29;
+    and.b32 %r30, %r24, 1;
+    mad.lo.u32 %r30, %r30, 16, %r26;
+    mad.lo.u32 %r31, %r28, 256, %r2;
+    mad.lo.u32 %r31, %r30, 4, %r31;
+
+    // Reuse completed matrix storage for the four ordered dot-tile sums.
+    @%p6 st.shared.f32 [%r31], %v0;
+    @%p6 st.shared.f32 [%r31+32], %v2;
+    @%p6 st.shared.f32 [%r31+128], %acc0;
+    @%p6 st.shared.f32 [%r31+160], %acc1;
+    bar.sync 0;
+    setp.ge.u32 %p7, %r0, 32;
+    @%p7 bra DONE;
+
+    // One warp combines the four tiles in order and writes all 32 FP16 outputs.
+    mad.lo.u32 %r32, %r0, 4, %r2;
+    ld.shared.f32 %f0, [%r32];
+    ld.shared.f32 %f1, [%r32+128];
+    ld.shared.f32 %f2, [%r32+256];
+    ld.shared.f32 %f3, [%r32+384];
+    add.f32 %f4, %f0, %f1;
+    add.f32 %f4, %f4, %f2;
+    add.f32 %f4, %f4, %f3;
+    cvt.rn.f16.f32 %h, %f4;
+    add.u32 %r33, %r3, %r0;
+    mul.wide.u32 %rd12, %r33, 2;
+    add.u64 %rd12, %rd2, %rd12;
+    st.global.b16 [%rd12], %h;
+DONE:
+    ret;
+}

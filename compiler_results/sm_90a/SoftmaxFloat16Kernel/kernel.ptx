@@ -1,0 +1,317 @@
+.version 8.7
+.target sm_90a
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 output_ptr,
+    .param .u64 input_ptr,
+    .param .u32 input_row_stride,
+    .param .u32 output_row_stride,
+    .param .u32 n_rows,
+    .param .u32 n_cols,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<3>;
+    .reg .b16 %h<4>;
+    .reg .b32 %r<24>, %v<16>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<32>, %s<16>;
+
+    // Four independent eight-lane groups in each warp process four rows.
+    ld.param.u32 %r2, [n_rows];
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r5, %tid.x;
+    shr.u32 %r7, %r5, 3;
+    mad.lo.u32 %r3, %r3, 16, %r7;
+    setp.ge.u32 %p0, %r3, %r2;
+    @%p0 bra DONE;
+
+    // Precompute runtime byte strides and aligned vector addresses.
+    ld.param.u64 %rd0, [input_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    ld.param.u32 %r0, [input_row_stride];
+    ld.param.u32 %r1, [output_row_stride];
+    shl.b32 %r0, %r0, 1;
+    shl.b32 %r1, %r1, 1;
+    mov.u32 %r4, %nctaid.x;
+    shl.b32 %r4, %r4, 4;
+    and.b32 %r6, %r5, 7;
+    mad.wide.u32 %rd0, %r6, 16, %rd0;
+    mad.wide.u32 %rd1, %r6, 16, %rd1;
+
+ROW_LOOP:
+    // Each lane loads 32 halves in four vectors, covering the full row.
+    mad.wide.u32 %rd4, %r3, %r0, %rd0;
+    ld.global.nc.v4.b32 {%v0, %v1, %v2, %v3}, [%rd4];
+    ld.global.nc.v4.b32 {%v4, %v5, %v6, %v7}, [%rd4+128];
+    ld.global.nc.v4.b32 {%v8, %v9, %v10, %v11}, [%rd4+256];
+    ld.global.nc.v4.b32 {%v12, %v13, %v14, %v15}, [%rd4+384];
+    mad.wide.u32 %rd6, %r3, %r1, %rd1;
+
+    // Reduce local values using packed half-precision maxima.
+    max.NaN.f16x2 %r14, %v0, %v1;
+    max.NaN.f16x2 %r15, %v2, %v3;
+    max.NaN.f16x2 %r16, %v4, %v5;
+    max.NaN.f16x2 %r17, %v6, %v7;
+    max.NaN.f16x2 %r18, %v8, %v9;
+    max.NaN.f16x2 %r19, %v10, %v11;
+    max.NaN.f16x2 %r20, %v12, %v13;
+    max.NaN.f16x2 %r21, %v14, %v15;
+    max.NaN.f16x2 %r14, %r14, %r15;
+    max.NaN.f16x2 %r16, %r16, %r17;
+    max.NaN.f16x2 %r18, %r18, %r19;
+    max.NaN.f16x2 %r20, %r20, %r21;
+    max.NaN.f16x2 %r14, %r14, %r16;
+    max.NaN.f16x2 %r18, %r18, %r20;
+    max.NaN.f16x2 %r14, %r14, %r18;
+
+    // Exchange packed maxima only between lanes of the same row.
+    shfl.sync.bfly.b32 %r15, %r14, 4, 31, -1;
+    max.NaN.f16x2 %r14, %r14, %r15;
+    shfl.sync.bfly.b32 %r15, %r14, 2, 31, -1;
+    max.NaN.f16x2 %r14, %r14, %r15;
+    shfl.sync.bfly.b32 %r15, %r14, 1, 31, -1;
+    max.NaN.f16x2 %r14, %r14, %r15;
+    mov.b32 {%h0, %h1}, %r14;
+    max.NaN.f16 %h2, %h0, %h1;
+    mov.b32 %r16, {%h2, %h2};
+
+    // Subtraction rounds in half precision before promotion for exp.
+    sub.rn.f16x2 %v0, %v0, %r16;
+    sub.rn.f16x2 %v1, %v1, %r16;
+    sub.rn.f16x2 %v2, %v2, %r16;
+    sub.rn.f16x2 %v3, %v3, %r16;
+    sub.rn.f16x2 %v4, %v4, %r16;
+    sub.rn.f16x2 %v5, %v5, %r16;
+    sub.rn.f16x2 %v6, %v6, %r16;
+    sub.rn.f16x2 %v7, %v7, %r16;
+    sub.rn.f16x2 %v8, %v8, %r16;
+    sub.rn.f16x2 %v9, %v9, %r16;
+    sub.rn.f16x2 %v10, %v10, %r16;
+    sub.rn.f16x2 %v11, %v11, %r16;
+    sub.rn.f16x2 %v12, %v12, %r16;
+    sub.rn.f16x2 %v13, %v13, %r16;
+    sub.rn.f16x2 %v14, %v14, %r16;
+    sub.rn.f16x2 %v15, %v15, %r16;
+    mov.b32 {%h0, %h1}, %v0;
+    cvt.f32.f16 %f0, %h0;
+    cvt.f32.f16 %f1, %h1;
+    mov.b32 {%h0, %h1}, %v1;
+    cvt.f32.f16 %f2, %h0;
+    cvt.f32.f16 %f3, %h1;
+    mov.b32 {%h0, %h1}, %v2;
+    cvt.f32.f16 %f4, %h0;
+    cvt.f32.f16 %f5, %h1;
+    mov.b32 {%h0, %h1}, %v3;
+    cvt.f32.f16 %f6, %h0;
+    cvt.f32.f16 %f7, %h1;
+    mov.b32 {%h0, %h1}, %v4;
+    cvt.f32.f16 %f8, %h0;
+    cvt.f32.f16 %f9, %h1;
+    mov.b32 {%h0, %h1}, %v5;
+    cvt.f32.f16 %f10, %h0;
+    cvt.f32.f16 %f11, %h1;
+    mov.b32 {%h0, %h1}, %v6;
+    cvt.f32.f16 %f12, %h0;
+    cvt.f32.f16 %f13, %h1;
+    mov.b32 {%h0, %h1}, %v7;
+    cvt.f32.f16 %f14, %h0;
+    cvt.f32.f16 %f15, %h1;
+    mov.b32 {%h0, %h1}, %v8;
+    cvt.f32.f16 %f16, %h0;
+    cvt.f32.f16 %f17, %h1;
+    mov.b32 {%h0, %h1}, %v9;
+    cvt.f32.f16 %f18, %h0;
+    cvt.f32.f16 %f19, %h1;
+    mov.b32 {%h0, %h1}, %v10;
+    cvt.f32.f16 %f20, %h0;
+    cvt.f32.f16 %f21, %h1;
+    mov.b32 {%h0, %h1}, %v11;
+    cvt.f32.f16 %f22, %h0;
+    cvt.f32.f16 %f23, %h1;
+    mov.b32 {%h0, %h1}, %v12;
+    cvt.f32.f16 %f24, %h0;
+    cvt.f32.f16 %f25, %h1;
+    mov.b32 {%h0, %h1}, %v13;
+    cvt.f32.f16 %f26, %h0;
+    cvt.f32.f16 %f27, %h1;
+    mov.b32 {%h0, %h1}, %v14;
+    cvt.f32.f16 %f28, %h0;
+    cvt.f32.f16 %f29, %h1;
+    mov.b32 {%h0, %h1}, %v15;
+    cvt.f32.f16 %f30, %h0;
+    cvt.f32.f16 %f31, %h1;
+
+    // Use float base-two exponentials with the log2(e) scaling factor.
+    mul.f32 %f0, %f0, 0f3fb8aa3b;
+    mul.f32 %f1, %f1, 0f3fb8aa3b;
+    mul.f32 %f2, %f2, 0f3fb8aa3b;
+    mul.f32 %f3, %f3, 0f3fb8aa3b;
+    mul.f32 %f4, %f4, 0f3fb8aa3b;
+    mul.f32 %f5, %f5, 0f3fb8aa3b;
+    mul.f32 %f6, %f6, 0f3fb8aa3b;
+    mul.f32 %f7, %f7, 0f3fb8aa3b;
+    mul.f32 %f8, %f8, 0f3fb8aa3b;
+    mul.f32 %f9, %f9, 0f3fb8aa3b;
+    mul.f32 %f10, %f10, 0f3fb8aa3b;
+    mul.f32 %f11, %f11, 0f3fb8aa3b;
+    mul.f32 %f12, %f12, 0f3fb8aa3b;
+    mul.f32 %f13, %f13, 0f3fb8aa3b;
+    mul.f32 %f14, %f14, 0f3fb8aa3b;
+    mul.f32 %f15, %f15, 0f3fb8aa3b;
+    mul.f32 %f16, %f16, 0f3fb8aa3b;
+    mul.f32 %f17, %f17, 0f3fb8aa3b;
+    mul.f32 %f18, %f18, 0f3fb8aa3b;
+    mul.f32 %f19, %f19, 0f3fb8aa3b;
+    mul.f32 %f20, %f20, 0f3fb8aa3b;
+    mul.f32 %f21, %f21, 0f3fb8aa3b;
+    mul.f32 %f22, %f22, 0f3fb8aa3b;
+    mul.f32 %f23, %f23, 0f3fb8aa3b;
+    mul.f32 %f24, %f24, 0f3fb8aa3b;
+    mul.f32 %f25, %f25, 0f3fb8aa3b;
+    mul.f32 %f26, %f26, 0f3fb8aa3b;
+    mul.f32 %f27, %f27, 0f3fb8aa3b;
+    mul.f32 %f28, %f28, 0f3fb8aa3b;
+    mul.f32 %f29, %f29, 0f3fb8aa3b;
+    mul.f32 %f30, %f30, 0f3fb8aa3b;
+    mul.f32 %f31, %f31, 0f3fb8aa3b;
+    ex2.approx.ftz.f32 %f0, %f0;
+    ex2.approx.ftz.f32 %f1, %f1;
+    ex2.approx.ftz.f32 %f2, %f2;
+    ex2.approx.ftz.f32 %f3, %f3;
+    ex2.approx.ftz.f32 %f4, %f4;
+    ex2.approx.ftz.f32 %f5, %f5;
+    ex2.approx.ftz.f32 %f6, %f6;
+    ex2.approx.ftz.f32 %f7, %f7;
+    ex2.approx.ftz.f32 %f8, %f8;
+    ex2.approx.ftz.f32 %f9, %f9;
+    ex2.approx.ftz.f32 %f10, %f10;
+    ex2.approx.ftz.f32 %f11, %f11;
+    ex2.approx.ftz.f32 %f12, %f12;
+    ex2.approx.ftz.f32 %f13, %f13;
+    ex2.approx.ftz.f32 %f14, %f14;
+    ex2.approx.ftz.f32 %f15, %f15;
+    ex2.approx.ftz.f32 %f16, %f16;
+    ex2.approx.ftz.f32 %f17, %f17;
+    ex2.approx.ftz.f32 %f18, %f18;
+    ex2.approx.ftz.f32 %f19, %f19;
+    ex2.approx.ftz.f32 %f20, %f20;
+    ex2.approx.ftz.f32 %f21, %f21;
+    ex2.approx.ftz.f32 %f22, %f22;
+    ex2.approx.ftz.f32 %f23, %f23;
+    ex2.approx.ftz.f32 %f24, %f24;
+    ex2.approx.ftz.f32 %f25, %f25;
+    ex2.approx.ftz.f32 %f26, %f26;
+    ex2.approx.ftz.f32 %f27, %f27;
+    ex2.approx.ftz.f32 %f28, %f28;
+    ex2.approx.ftz.f32 %f29, %f29;
+    ex2.approx.ftz.f32 %f30, %f30;
+    ex2.approx.ftz.f32 %f31, %f31;
+
+    // Sum the float numerators locally, then within the row group.
+    add.f32 %s0, %f0, %f1;
+    add.f32 %s1, %f2, %f3;
+    add.f32 %s2, %f4, %f5;
+    add.f32 %s3, %f6, %f7;
+    add.f32 %s4, %f8, %f9;
+    add.f32 %s5, %f10, %f11;
+    add.f32 %s6, %f12, %f13;
+    add.f32 %s7, %f14, %f15;
+    add.f32 %s8, %f16, %f17;
+    add.f32 %s9, %f18, %f19;
+    add.f32 %s10, %f20, %f21;
+    add.f32 %s11, %f22, %f23;
+    add.f32 %s12, %f24, %f25;
+    add.f32 %s13, %f26, %f27;
+    add.f32 %s14, %f28, %f29;
+    add.f32 %s15, %f30, %f31;
+    add.f32 %s0, %s0, %s1;
+    add.f32 %s2, %s2, %s3;
+    add.f32 %s4, %s4, %s5;
+    add.f32 %s6, %s6, %s7;
+    add.f32 %s8, %s8, %s9;
+    add.f32 %s10, %s10, %s11;
+    add.f32 %s12, %s12, %s13;
+    add.f32 %s14, %s14, %s15;
+    add.f32 %s0, %s0, %s2;
+    add.f32 %s4, %s4, %s6;
+    add.f32 %s8, %s8, %s10;
+    add.f32 %s12, %s12, %s14;
+    add.f32 %s0, %s0, %s4;
+    add.f32 %s8, %s8, %s12;
+    add.f32 %s0, %s0, %s8;
+    shfl.sync.bfly.b32 %s1, %s0, 4, 31, -1;
+    add.f32 %s0, %s0, %s1;
+    shfl.sync.bfly.b32 %s1, %s0, 2, 31, -1;
+    add.f32 %s0, %s0, %s1;
+    shfl.sync.bfly.b32 %s1, %s0, 1, 31, -1;
+    add.f32 %s0, %s0, %s1;
+    rcp.approx.ftz.f32 %s0, %s0;
+
+    // Normalize in float and round the final outputs back to half.
+    mul.f32 %f0, %f0, %s0;
+    mul.f32 %f1, %f1, %s0;
+    mul.f32 %f2, %f2, %s0;
+    mul.f32 %f3, %f3, %s0;
+    mul.f32 %f4, %f4, %s0;
+    mul.f32 %f5, %f5, %s0;
+    mul.f32 %f6, %f6, %s0;
+    mul.f32 %f7, %f7, %s0;
+    mul.f32 %f8, %f8, %s0;
+    mul.f32 %f9, %f9, %s0;
+    mul.f32 %f10, %f10, %s0;
+    mul.f32 %f11, %f11, %s0;
+    mul.f32 %f12, %f12, %s0;
+    mul.f32 %f13, %f13, %s0;
+    mul.f32 %f14, %f14, %s0;
+    mul.f32 %f15, %f15, %s0;
+    mul.f32 %f16, %f16, %s0;
+    mul.f32 %f17, %f17, %s0;
+    mul.f32 %f18, %f18, %s0;
+    mul.f32 %f19, %f19, %s0;
+    mul.f32 %f20, %f20, %s0;
+    mul.f32 %f21, %f21, %s0;
+    mul.f32 %f22, %f22, %s0;
+    mul.f32 %f23, %f23, %s0;
+    mul.f32 %f24, %f24, %s0;
+    mul.f32 %f25, %f25, %s0;
+    mul.f32 %f26, %f26, %s0;
+    mul.f32 %f27, %f27, %s0;
+    mul.f32 %f28, %f28, %s0;
+    mul.f32 %f29, %f29, %s0;
+    mul.f32 %f30, %f30, %s0;
+    mul.f32 %f31, %f31, %s0;
+    cvt.rn.f16x2.f32 %v0, %f1, %f0;
+    cvt.rn.f16x2.f32 %v1, %f3, %f2;
+    cvt.rn.f16x2.f32 %v2, %f5, %f4;
+    cvt.rn.f16x2.f32 %v3, %f7, %f6;
+    cvt.rn.f16x2.f32 %v4, %f9, %f8;
+    cvt.rn.f16x2.f32 %v5, %f11, %f10;
+    cvt.rn.f16x2.f32 %v6, %f13, %f12;
+    cvt.rn.f16x2.f32 %v7, %f15, %f14;
+    cvt.rn.f16x2.f32 %v8, %f17, %f16;
+    cvt.rn.f16x2.f32 %v9, %f19, %f18;
+    cvt.rn.f16x2.f32 %v10, %f21, %f20;
+    cvt.rn.f16x2.f32 %v11, %f23, %f22;
+    cvt.rn.f16x2.f32 %v12, %f25, %f24;
+    cvt.rn.f16x2.f32 %v13, %f27, %f26;
+    cvt.rn.f16x2.f32 %v14, %f29, %f28;
+    cvt.rn.f16x2.f32 %v15, %f31, %f30;
+
+    // Coalesced vector writes store every column without a column mask.
+    st.global.wb.v4.b32 [%rd6], {%v0, %v1, %v2, %v3};
+    st.global.wb.v4.b32 [%rd6+128], {%v4, %v5, %v6, %v7};
+    st.global.wb.v4.b32 [%rd6+256], {%v8, %v9, %v10, %v11};
+    st.global.wb.v4.b32 [%rd6+384], {%v12, %v13, %v14, %v15};
+
+    // Advance through the grid-stride row traversal, masking only rows.
+    add.u32 %r3, %r3, %r4;
+    setp.lt.u32 %p0, %r3, %r2;
+    @%p0 bra ROW_LOOP;
+DONE:
+    ret;
+}

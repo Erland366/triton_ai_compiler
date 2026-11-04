@@ -1,0 +1,80 @@
+{
+  "iteration": 0,
+  "try": 1,
+  "candidate_index": 0,
+  "prompt_name": "initial_candidate_repair",
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n/* Precomputed FP16 GELU results indexed by the complete FP8 encoding.\n.global .align 16 .u16 gelu_lut[256] = {0,5122,6147,6663,7174,7434,7694,7956,8205,8336,8468,8600,8733,8866,8999,9133,9242,9376,9512,9648,9785,9923,10062,10202,10291,10433,10576,10720,10867,11015,11164,11290,11366,11521,11679,11840,12004,12172,12315,12402,12490,12671,12858,13051,13249,13382,13487,13594,13704,13931,14167,14374,14500,14629,14762,14897,14897,15316,15481,15625,15769,15913,16056,16198,16337,16498,16632,16764,16894,17023,17152,17280,17408,17536,17664,17792,17920,18048,18176,18304,18432,18560,18688,18816,18944,19072,19200,19328,19456,19584,19712,19840,19968,20096,20224,20352,20480,20608,20736,20864,20992,21120,21248,21376,21504,21632,21760,21888,22016,22144,22272,22400,22528,22656,22784,22912,23040,23168,23296,23424,23552,23680,23808,23936,24064,24192,24320,32256,32768,37885,38906,39417,39923,40182,40434,40684,40934,41072,41196,41320,41443,41566,41689,41811,41933,42080,42200,42320,42439,42557,42674,42790,42906,43071,43184,43296,43405,43513,43620,43725,43828,44030,44129,44224,44316,44404,44490,44572,44652,44802,44940,45061,45119,45171,45218,45259,45296,45354,45394,45417,45424,45418,45400,45370,45332,45233,45114,44913,44650,44395,44157,43852,43475,42763,41971,41010,39974,38830,37548,36207,34855,33024,32793,32771,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32256};\n\n*/\n.global .align 16 .u16 gelu_lut[256] = {0,5122,6147,6663,7174,7434,7694,7956,8205,8336,8468,8600,8733,8866,8999,9133,9242,9376,9512,9648,9785,9923,10062,10202,10291,10433,10576,10720,10867,11015,11164,11290,11366,11521,11679,11840,12004,12172,12315,12402,12490,12671,12858,13051,13249,13382,13487,13594,13704,13931,14167,14374,14500,14629,14762,14897,15035,15316,15481,15625,15769,15913,16056,16198,16337,16498,16632,16764,16894,17023,17152,17280,17408,17536,17664,17792,17920,18048,18176,18304,18432,18560,18688,18816,18944,19072,19200,19328,19456,19584,19712,19840,19968,20096,20224,20352,20480,20608,20736,20864,20992,21120,21248,21376,21504,21632,21760,21888,22016,22144,22272,22400,22528,22656,22784,22912,23040,23168,23296,23424,23552,23680,23808,23936,24064,24192,24320,32256,32768,37885,38906,39417,39923,40182,40434,40684,40934,41072,41196,41320,41443,41566,41689,41811,41933,42080,42200,42320,42439,42557,42674,42790,42906,43071,43184,43296,43405,43513,43620,43725,43828,44030,44129,44224,44316,44404,44490,44572,44652,44802,44940,45061,45119,45171,45218,45259,45296,45354,45394,45417,45424,45418,45400,45370,45332,45233,45114,44913,44650,44395,44157,43852,43475,42763,41971,41010,39974,38830,37548,36207,34855,33024,32793,32771,32768,32768,32768,32768, 32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768, 32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768, 32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32768,32256};\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .b32 %r<16>;\n    .reg .b64 %d<12>;\n    .reg .b16 %h<4>;\n\n    // Four adjacent elements per thread cover the unmasked 1024-element tile.\n    ld.param.u64 %d0, [x_ptr];\n    ld.param.u64 %d1, [output_ptr];\n    mov.u32 %r0, %ctaid.x;\n    mov.u32 %r1, %tid.x;\n    shl.b32 %r2, %r0, 10;\n    mad.lo.u32 %r2, %r1, 4, %r2;\n\n    // Form input, output, and read-only lookup addresses.\n    cvta.global.u64 %d2, gelu_lut;\n    mul.wide.u32 %d3, %r2, 1;\n    add.u64 %d4, %d0, %d3;\n    mul.wide.u32 %d5, %r2, 2;\n    add.u64 %d5, %d1, %d5;\n\n    // Extract four FP8 encodings from one aligned load.\n    ld.global.u32 %r3, [%d4];\n    bfe.u32 %r4, %r3, 0, 8;\n    bfe.u32 %r5, %r3, 8, 8;\n    bfe.u32 %r6, %r3, 16, 8;\n    bfe.u32 %r7, %r3, 24, 8;\n\n    // Lookup rounded GELU values, keeping the small table resident in L1.\n    mul.wide.u32 %d6, %r4, 2;\n    mul.wide.u32 %d7, %r5, 2;\n    mul.wide.u32 %d8, %r6, 2;\n    mul.wide.u32 %d9, %r7, 2;\n    add.u64 %d6, %d2, %d6;\n    add.u64 %d7, %d2, %d7;\n    add.u64 %d8, %d2, %d8;\n    add.u64 %d9, %d2, %d9;\n    ld.global.L1::evict_last.u16 %h0, [%d6];\n    ld.global.L1::evict_last.u16 %h1, [%d7];\n    ld.global.L1::evict_last.u16 %h2, [%d8];\n    ld.global.L1::evict_last.u16 %h3, [%d9];\n\n    // Pack and store four contiguous FP16 results.\n    mov.b32 %r8, {%h0, %h1};\n    mov.b32 %r9, {%h2, %h3};\n    st.global.v2.u32 [%d5], {%r8, %r9};\n    ret;\n}",
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1,
+    "difficulties": []
+  },
+  "evaluation": {
+    "kernel_name": "GELUFloat8Kernel",
+    "git_commit_hash": "979bb03212582562600ae8b4768dfbaf3fa97170",
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.007044480023905635,
+    "triton_p50": 0.007135999854654074,
+    "triton_p80": 0.0072326401155442,
+    "triton_p90": 0.007310720039531589,
+    "triton_p95": 0.008048640163615346,
+    "triton_p99": 0.008289279788732529,
+    "p20": 0.007040000054985285,
+    "p50": 0.007135999854654074,
+    "p80": 0.00723200011998415,
+    "p90": 0.007264639902859926,
+    "p95": 0.007326719928532839,
+    "p99": 0.00814991998616606,
+    "speedup_vs_triton": 1.0,
+    "compile_output": "Command: /workspace/triton_ptx_client/triton_ptx/triton/third_party/nvidia/backend/bin/ptxas-blackwell -arch=sm_100a -v --warning-as-error /tmp/triton-ptxas-jr_v2gd3/kernel.ptx -o /tmp/triton-ptxas-jr_v2gd3/kernel.cubin\n\nReturn code: 0\n\nSTDOUT:\n\n\nSTDERR:\nptxas-blackwell info    : 512 bytes gmem\nptxas-blackwell info    : Compiling entry function 'kernel' for 'sm_100a'\nptxas-blackwell info    : Function properties for kernel\n    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads\nptxas-blackwell info    : Used 18 registers, used 0 barriers\nptxas-blackwell info    : Compile time = 2.517 ms",
+    "compile_error": "",
+    "timing_error": "",
+    "ncu_report": {
+      "available": true,
+      "summary": {},
+      "metrics": {},
+      "error": "",
+      "return_code": 1
+    },
+    "sanitizer_report": {
+      "available": true,
+      "clean": true,
+      "tool": "memcheck",
+      "returncode": 0,
+      "error_count": 0,
+      "diagnostics": [],
+      "ptx_locations": []
+    },
+    "verifier_report": {
+      "status": "passed",
+      "seed": 42,
+      "iteration": 999
+    },
+    "passed": true
+  },
+  "autotune_metrics": {
+    "operator": "GELUFloat8Kernel",
+    "constexpr_values": {
+      "n_elements": 4096,
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.007193960088786314,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA B200",
+  "run_cost_usd_so_far": 1.9264154999999998
+}

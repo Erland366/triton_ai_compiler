@@ -1,0 +1,141 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 output_ptr,
+    .param .u64 input_ptr,
+    .param .u32 input_row_stride,
+    .param .u32 output_row_stride,
+    .param .u32 n_rows,
+    .param .u32 n_cols,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<4>;
+    .reg .b16 %h<20>;
+    .reg .b32 %r<40>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<24>;
+
+    // Warp zero handles eight columns per lane; the other launched warps exit.
+    mov.u32 %r3, %ctaid.x;
+    ld.param.u32 %r2, [n_rows];
+    mov.u32 %r5, %tid.x;
+    setp.ge.u32 %p0, %r5, 32;
+    setp.ge.or.u32 %p0, %r3, %r2, %p0;
+    @%p0 ret.uni;
+
+    // Convert the runtime strides to bytes and form lane-relative base pointers.
+    ld.param.u64 %rd0, [output_ptr];
+    ld.param.u64 %rd1, [input_ptr];
+    ld.param.u32 %r0, [input_row_stride];
+    ld.param.u32 %r1, [output_row_stride];
+    mov.u32 %r4, %nctaid.x;
+    shl.b32 %r0, %r0, 1;
+    shl.b32 %r1, %r1, 1;
+    mul.wide.u32 %rd2, %r5, 16;
+    add.u64 %rd0, %rd0, %rd2;
+    add.u64 %rd1, %rd1, %rd2;
+
+ROW_LOOP:
+    // Load eight consecutive halves per lane, covering all 256 unmasked columns.
+    mad.wide.u32 %rd3, %r3, %r0, %rd1;
+    mad.wide.u32 %rd4, %r3, %r1, %rd0;
+    ld.global.cg.v4.b32 {%r10, %r11, %r12, %r13}, [%rd3];
+
+    // Reduce the eight half values locally and duplicate the local maximum.
+    max.NaN.f16x2 %r14, %r10, %r11;
+    max.NaN.f16x2 %r15, %r12, %r13;
+    max.NaN.f16x2 %r14, %r14, %r15;
+    mov.b32 {%h0, %h1}, %r14;
+    max.NaN.f16 %h2, %h0, %h1;
+    mov.b32 %r16, {%h2, %h2};
+
+    // Signed bit patterns order positive halves; negative-only warps need the minimum.
+    redux.sync.max.s32 %r18, %r16, 0xffffffff;
+    setp.lt.s32 %p3, %r18, 0;
+    @%p3 redux.sync.min.s32 %r18, %r16, 0xffffffff;
+
+    // Preserve half-precision subtraction before promoting each difference to float.
+    sub.rn.f16x2 %r20, %r10, %r18;
+    mov.b32 {%h4, %h5}, %r20;
+    cvt.f32.f16 %f0, %h4;
+    cvt.f32.f16 %f1, %h5;
+    sub.rn.f16x2 %r21, %r11, %r18;
+    mov.b32 {%h6, %h7}, %r21;
+    cvt.f32.f16 %f2, %h6;
+    cvt.f32.f16 %f3, %h7;
+    sub.rn.f16x2 %r22, %r12, %r18;
+    mov.b32 {%h8, %h9}, %r22;
+    cvt.f32.f16 %f4, %h8;
+    cvt.f32.f16 %f5, %h9;
+    sub.rn.f16x2 %r23, %r13, %r18;
+    mov.b32 {%h10, %h11}, %r23;
+    cvt.f32.f16 %f6, %h10;
+    cvt.f32.f16 %f7, %h11;
+
+    // Evaluate exp(x) as exp2(x * log2(e)); float underflows cannot affect half outputs.
+    mul.f32 %f0, %f0, 0f3fb8aa3b;
+    mul.f32 %f1, %f1, 0f3fb8aa3b;
+    mul.f32 %f2, %f2, 0f3fb8aa3b;
+    mul.f32 %f3, %f3, 0f3fb8aa3b;
+    mul.f32 %f4, %f4, 0f3fb8aa3b;
+    mul.f32 %f5, %f5, 0f3fb8aa3b;
+    mul.f32 %f6, %f6, 0f3fb8aa3b;
+    mul.f32 %f7, %f7, 0f3fb8aa3b;
+    ex2.approx.ftz.f32 %f0, %f0;
+    ex2.approx.ftz.f32 %f1, %f1;
+    ex2.approx.ftz.f32 %f2, %f2;
+    ex2.approx.ftz.f32 %f3, %f3;
+    ex2.approx.ftz.f32 %f4, %f4;
+    ex2.approx.ftz.f32 %f5, %f5;
+    ex2.approx.ftz.f32 %f6, %f6;
+    ex2.approx.ftz.f32 %f7, %f7;
+
+    // Accumulate locally, then sum the entire row through five warp shuffles.
+    add.f32 %f10, %f0, %f1;
+    add.f32 %f11, %f2, %f3;
+    add.f32 %f12, %f4, %f5;
+    add.f32 %f13, %f6, %f7;
+    add.f32 %f10, %f10, %f11;
+    add.f32 %f12, %f12, %f13;
+    add.f32 %f8, %f10, %f12;
+    shfl.sync.bfly.b32 %f9, %f8, 16, 31, 0xffffffff;
+    add.f32 %f8, %f8, %f9;
+    shfl.sync.bfly.b32 %f9, %f8, 8, 31, 0xffffffff;
+    add.f32 %f8, %f8, %f9;
+    shfl.sync.bfly.b32 %f9, %f8, 4, 31, 0xffffffff;
+    add.f32 %f8, %f8, %f9;
+    shfl.sync.bfly.b32 %f9, %f8, 2, 31, 0xffffffff;
+    add.f32 %f8, %f8, %f9;
+    shfl.sync.bfly.b32 %f9, %f8, 1, 31, 0xffffffff;
+    add.f32 %f8, %f8, %f9;
+
+    // Normalize in float and round the eight outputs to packed half pairs.
+    rcp.approx.ftz.f32 %f8, %f8;
+    mul.f32 %f0, %f0, %f8;
+    mul.f32 %f1, %f1, %f8;
+    mul.f32 %f2, %f2, %f8;
+    mul.f32 %f3, %f3, %f8;
+    mul.f32 %f4, %f4, %f8;
+    mul.f32 %f5, %f5, %f8;
+    mul.f32 %f6, %f6, %f8;
+    mul.f32 %f7, %f7, %f8;
+    cvt.rn.f16x2.f32 %r24, %f1, %f0;
+    cvt.rn.f16x2.f32 %r25, %f3, %f2;
+    cvt.rn.f16x2.f32 %r26, %f5, %f4;
+    cvt.rn.f16x2.f32 %r27, %f7, %f6;
+
+    // Store all columns with one coalesced vector store per lane.
+    st.global.v4.b32 [%rd4], {%r24, %r25, %r26, %r27};
+
+    // Preserve the original program's grid-stride row loop.
+    add.u32 %r3, %r3, %r4;
+    setp.lt.u32 %p1, %r3, %r2;
+    @%p1 bra.uni ROW_LOOP;
+    ret.uni;
+}

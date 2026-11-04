@@ -1,0 +1,32 @@
+{
+  "ptx": ".version 8.7\n.target sm_89\n.address_size 64\n\n.extern .shared .align 16 .b8 global_smem[];\n\n.visible .entry kernel(\n    .param .u64 x_ptr,\n    .param .u64 output_ptr,\n    .param .u64 dummy_ptr1,\n    .param .u64 dummy_ptr2\n)\n{\n    .reg .pred %p<2>;\n    .reg .b16 %h<16>;\n    .reg .b32 %r<8>, %a<8>;\n    .reg .b64 %rd<5>;\n    .reg .f32 %f<17>;\n\n    // Warp zero explicitly covers all 512 elements with sixteen values per lane.\n    mov.u32 %r0, %tid.x;\n    setp.ge.u32 %p0, %r0, 32;\n    @%p0 bra DONE;\n    ld.param.u64 %rd0, [x_ptr];\n    ld.param.u64 %rd1, [output_ptr];\n    mov.u32 %r1, %ctaid.x;\n    mov.u32 %r2, %ctaid.y;\n    shl.b32 %r3, %r2, 13;\n    shl.b32 %r4, %r1, 10;\n    add.u32 %r3, %r3, %r4;\n    mad.lo.u32 %r3, %r0, 16, %r3;\n    cvt.u64.u32 %rd2, %r3;\n    add.u64 %rd2, %rd0, %rd2;\n\n    // Two coalesced vector loads cover the entire unmasked tile.\n    ld.global.v4.b32 {%a0, %a1, %a2, %a3}, [%rd2];\n    ld.global.v4.b32 {%a4, %a5, %a6, %a7}, [%rd2+512];\n    mov.b32 {%h0, %h1}, %a0;\n    mov.b32 {%h2, %h3}, %a1;\n    mov.b32 {%h4, %h5}, %a2;\n    mov.b32 {%h6, %h7}, %a3;\n    mov.b32 {%h8, %h9}, %a4;\n    mov.b32 {%h10, %h11}, %a5;\n    mov.b32 {%h12, %h13}, %a6;\n    mov.b32 {%h14, %h15}, %a7;\n\n    // Convert every half to FP32 before a balanced local reduction.\n    cvt.f32.f16 %f0, %h0;\n    cvt.f32.f16 %f1, %h1;\n    cvt.f32.f16 %f2, %h2;\n    cvt.f32.f16 %f3, %h3;\n    cvt.f32.f16 %f4, %h4;\n    cvt.f32.f16 %f5, %h5;\n    cvt.f32.f16 %f6, %h6;\n    cvt.f32.f16 %f7, %h7;\n    cvt.f32.f16 %f8, %h8;\n    cvt.f32.f16 %f9, %h9;\n    cvt.f32.f16 %f10, %h10;\n    cvt.f32.f16 %f11, %h11;\n    cvt.f32.f16 %f12, %h12;\n    cvt.f32.f16 %f13, %h13;\n    cvt.f32.f16 %f14, %h14;\n    cvt.f32.f16 %f15, %h15;\n    add.f32 %f0, %f0, %f8;\n    add.f32 %f1, %f1, %f9;\n    add.f32 %f2, %f2, %f10;\n    add.f32 %f3, %f3, %f11;\n    add.f32 %f4, %f4, %f12;\n    add.f32 %f5, %f5, %f13;\n    add.f32 %f6, %f6, %f14;\n    add.f32 %f7, %f7, %f15;\n    add.f32 %f0, %f0, %f4;\n    add.f32 %f1, %f1, %f5;\n    add.f32 %f2, %f2, %f6;\n    add.f32 %f3, %f3, %f7;\n    add.f32 %f0, %f0, %f2;\n    add.f32 %f1, %f1, %f3;\n    add.f32 %f0, %f0, %f1;\n\n    // Combine all thirty-two lane sums without shared memory or a CTA barrier.\n    shfl.sync.bfly.b32 %f16, %f0, 16, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f16;\n    shfl.sync.bfly.b32 %f16, %f0, 8, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f16;\n    shfl.sync.bfly.b32 %f16, %f0, 4, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f16;\n    shfl.sync.bfly.b32 %f16, %f0, 2, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f16;\n    shfl.sync.bfly.b32 %f16, %f0, 1, 31, 0xffffffff;\n    add.f32 %f0, %f0, %f16;\n\n    // A single lane atomically adds the tile sum to the existing output.\n    mul.wide.u32 %rd3, %r2, 4;\n    add.u64 %rd3, %rd1, %rd3;\n    setp.eq.u32 %p1, %r0, 0;\n    @%p1 red.relaxed.gpu.global.add.f32 [%rd3], %f0;\nDONE:\n    ret;\n}\n",
+  "num_threads_x": 128,
+  "num_threads_y": 1,
+  "num_threads_z": 1,
+  "difficulties": [
+    "Verifier-inserted .loc directives require single-line MMA instructions."
+  ],
+  "speedup": 1.0144092480064923,
+  "p50": 0.011103999800980091,
+  "autotune_metrics": {
+    "operator": "ReductionSumFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 512
+    },
+    "selected_config": {
+      "block_size": 512,
+      "num_warps": 4
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 512,
+        "num_warps": 4
+      },
+      "latency_ms": 60.81743203103542,
+      "evaluated_configurations": 18,
+      "rejected_configurations": 0
+    }
+  },
+  "gpu_type": "NVIDIA L40S",
+  "run_cost_usd_so_far": 4.602048
+}

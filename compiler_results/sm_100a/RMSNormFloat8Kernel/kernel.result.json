@@ -1,0 +1,60 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_8Ik5XsTXWXapXubCUVp0w2hc",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.008128000423312187,
+    "triton_p50": 0.008224000222980976,
+    "triton_p80": 0.008320000022649765,
+    "triton_p90": 0.008349120244383812,
+    "triton_p95": 0.008383999578654766,
+    "triton_p99": 0.008448000065982342,
+    "p20": 0.006178431978449225,
+    "p50": 0.008058239892125129,
+    "p80": 0.00825599953532219,
+    "p90": 0.008295423835515976,
+    "p95": 0.008320352025330066,
+    "p99": 0.008415839821100234,
+    "speedup_vs_triton": 1.0205702899237135,
+    "passed": true,
+    "ncu_report": {
+      "error": "Failed to start Nsight Compute: [Errno 2] No such file or directory: '/usr/local/cuda/bin/ncu'"
+    }
+  },
+  "run_cost_usd_so_far": 0.48058999999999996,
+  "autotune_metrics": {
+    "operator": "RMSNormFloat8Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 4096,
+      "EPS": 1e-06
+    },
+    "selected_config": {
+      "block_size": 4096,
+      "num_warps": 16
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 4096,
+        "num_warps": 16
+      },
+      "latency_ms": 0.008175638272147324,
+      "evaluated_configurations": 18,
+      "rejected_configurations": 15
+    }
+  },
+  "speedup_vs_triton": 1.0205702899237135,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_100a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 x_ptr,\n.param .u64 weight_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n){\n.reg .b32 %r<24>;\n.reg .b64 %a<12>;\n.reg .b16 %h<12>;\n.reg .f32 %x<8>, %w<8>, %s, %t, %v, %q<4>;\n.reg .pred %p;\n// Each thread owns eight adjacent elements of one complete row.\nld.param.u64 %a0,[x_ptr];\nld.param.u64 %a1,[weight_ptr];\nld.param.u64 %a2,[output_ptr];\nmov.u32 %r0,%tid.x;\nmov.u32 %r1,%ctaid.x;\nshl.b32 %r2,%r0,3;\nmad.lo.u32 %r3,%r1,4096,%r2;\ncvt.u64.u32 %a3,%r3;\nadd.u64 %a4,%a0,%a3;\nadd.u64 %a5,%a1,%a3;\nshl.b64 %a3,%a3,1;\nadd.u64 %a6,%a2,%a3;\n// Fetch both inputs early and decode eight FP8 activations.\nld.global.v2.u32 {%r4,%r5},[%a4];\nld.global.v2.u32 {%r12,%r13},[%a5];\nmov.b32 {%h0,%h1},%r4;\nmov.b32 {%h2,%h3},%r5;\ncvt.rn.f16x2.e4m3x2 %r6,%h0;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %x0,%h4;\ncvt.f32.f16 %x1,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h1;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %x2,%h4;\ncvt.f32.f16 %x3,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h2;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %x4,%h4;\ncvt.f32.f16 %x5,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h3;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %x6,%h4;\ncvt.f32.f16 %x7,%h5;\n// Independent partial sums shorten the local reduction dependency chain.\nmul.f32 %q0,%x0,%x0;\nmul.f32 %q1,%x2,%x2;\nmul.f32 %q2,%x4,%x4;\nmul.f32 %q3,%x6,%x6;\nfma.rn.f32 %q0,%x1,%x1,%q0;\nfma.rn.f32 %q1,%x3,%x3,%q1;\nfma.rn.f32 %q2,%x5,%x5,%q2;\nfma.rn.f32 %q3,%x7,%x7,%q3;\nadd.f32 %q0,%q0,%q1;\nadd.f32 %q2,%q2,%q3;\nadd.f32 %s,%q0,%q2;\n// Reduce all thirty-two lanes in each warp.\nshfl.sync.bfly.b32 %t,%s,16,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,8,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,4,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,2,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,1,31,-1;\nadd.f32 %s,%s,%t;\n// Publish sixteen warp sums using exactly 64 dynamic shared bytes.\nand.b32 %r7,%r0,31;\nshr.u32 %r8,%r0,5;\nmov.u32 %r9,global_smem;\nmad.lo.u32 %r10,%r8,4,%r9;\nsetp.eq.u32 %p,%r7,0;\n@%p st.shared.f32 [%r10],%s;\nbar.sync 0;\n// Every warp independently reduces the same sixteen partial sums.\nand.b32 %r11,%r7,15;\nmad.lo.u32 %r10,%r11,4,%r9;\nld.shared.f32 %s,[%r10];\nshfl.sync.bfly.b32 %t,%s,8,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,4,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,2,31,-1;\nadd.f32 %s,%s,%t;\nshfl.sync.bfly.b32 %t,%s,1,31,-1;\nadd.f32 %s,%s,%t;\nmul.f32 %s,%s,0f39800000;\nadd.f32 %s,%s,0f358637bd;\nrsqrt.approx.f32 %v,%s;\n// Decode the prefetched weights without further global loads.\nmov.b32 {%h0,%h1},%r12;\nmov.b32 {%h2,%h3},%r13;\ncvt.rn.f16x2.e4m3x2 %r6,%h0;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %w0,%h4;\ncvt.f32.f16 %w1,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h1;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %w2,%h4;\ncvt.f32.f16 %w3,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h2;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %w4,%h4;\ncvt.f32.f16 %w5,%h5;\ncvt.rn.f16x2.e4m3x2 %r6,%h3;\nmov.b32 {%h4,%h5},%r6;\ncvt.f32.f16 %w6,%h4;\ncvt.f32.f16 %w7,%h5;\n// Preserve the FP32 order: normalize first, then multiply by weight.\nmul.f32 %x0,%x0,%v;\nmul.f32 %x1,%x1,%v;\nmul.f32 %x2,%x2,%v;\nmul.f32 %x3,%x3,%v;\nmul.f32 %x4,%x4,%v;\nmul.f32 %x5,%x5,%v;\nmul.f32 %x6,%x6,%v;\nmul.f32 %x7,%x7,%v;\nmul.f32 %x0,%x0,%w0;\nmul.f32 %x1,%x1,%w1;\nmul.f32 %x2,%x2,%w2;\nmul.f32 %x3,%x3,%w3;\nmul.f32 %x4,%x4,%w4;\nmul.f32 %x5,%x5,%w5;\nmul.f32 %x6,%x6,%w6;\nmul.f32 %x7,%x7,%w7;\n// Round to FP16 and store the contiguous sixteen-byte output segment.\ncvt.rn.f16x2.f32 %r16,%x1,%x0;\ncvt.rn.f16x2.f32 %r17,%x3,%x2;\ncvt.rn.f16x2.f32 %r18,%x5,%x4;\ncvt.rn.f16x2.f32 %r19,%x7,%x6;\nst.global.v4.u32 [%a6],{%r16,%r17,%r18,%r19};\nret;\n}",
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 512,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

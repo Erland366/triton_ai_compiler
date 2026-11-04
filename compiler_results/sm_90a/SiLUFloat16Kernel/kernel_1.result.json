@@ -1,0 +1,56 @@
+{
+  "provider": "openai",
+  "tool_name": "launch_verifier",
+  "call_id": "call_uk7heEaooxDJRyo5aODlL188",
+  "answer": {
+    "compiles": true,
+    "correct": true,
+    "message": "Compiled, passed correctness, benchmarked successfully",
+    "triton_p20": 0.0073571840524673466,
+    "triton_p50": 0.0075603199284523725,
+    "triton_p80": 0.007757439929991961,
+    "triton_p90": 0.00783488005399704,
+    "triton_p95": 0.007891839873045682,
+    "triton_p99": 0.00805845109373331,
+    "p20": 0.007363712061196566,
+    "p50": 0.007562879929319024,
+    "p80": 0.007758079953491688,
+    "p90": 0.007834240049123763,
+    "p95": 0.007893951827660202,
+    "p99": 0.008061171151697636,
+    "speedup_vs_triton": 0.9996615044942433,
+    "passed": true
+  },
+  "run_cost_usd_so_far": 0.1251425,
+  "autotune_metrics": {
+    "operator": "SiLUFloat16Kernel",
+    "constexpr_values": {
+      "BLOCK_SIZE": 1024
+    },
+    "selected_config": {
+      "block_size": 1024,
+      "num_warps": 8
+    },
+    "tuning_result": {
+      "parameters": {
+        "block_size": 1024,
+        "num_warps": 8
+      },
+      "latency_ms": 0.007185910800940914,
+      "evaluated_configurations": 21,
+      "rejected_configurations": 0
+    }
+  },
+  "speedup_vs_triton": 0.9996615044942433,
+  "candidate": {
+    "ptx": ".version 8.7\n.target sm_90a\n.address_size 64\n.extern .shared .align 16 .b8 global_smem[];\n.visible .entry kernel(\n.param .u64 x_ptr,\n.param .u64 output_ptr,\n.param .u64 dummy_ptr1,\n.param .u64 dummy_ptr2\n)\n{\n.reg .b32 %t, %b, %i, %p<4>;\n.reg .b64 %x, %y, %off;\n.reg .b16 %h<8>;\n.reg .f32 %v<4>, %a<4>;\n// Each thread handles four adjacent half elements within its 1024-element tile.\nld.param.u64 %x, [x_ptr];\nld.param.u64 %y, [output_ptr];\nmov.u32 %t, %tid.x;\nmov.u32 %b, %ctaid.x;\nshl.b32 %i, %b, 10;\nmad.lo.u32 %i, %t, 4, %i;\nmul.wide.u32 %off, %i, 2;\nadd.u64 %x, %x, %off;\nadd.u64 %y, %y, %off;\n// Load four packed half values and convert them to float32.\nld.global.v2.b32 {%p0, %p1}, [%x];\nmov.b32 {%h0, %h1}, %p0;\nmov.b32 {%h2, %h3}, %p1;\ncvt.f32.f16 %v0, %h0;\ncvt.f32.f16 %v1, %h1;\ncvt.f32.f16 %v2, %h2;\ncvt.f32.f16 %v3, %h3;\n// Compute exp(-x) using the base-2 exponential.\nmul.f32 %a0, %v0, 0fBFB8AA3B;\nmul.f32 %a1, %v1, 0fBFB8AA3B;\nmul.f32 %a2, %v2, 0fBFB8AA3B;\nmul.f32 %a3, %v3, 0fBFB8AA3B;\nex2.approx.f32 %a0, %a0;\nex2.approx.f32 %a1, %a1;\nex2.approx.f32 %a2, %a2;\nex2.approx.f32 %a3, %a3;\n// Form x / (1 + exp(-x)) in float32.\nadd.f32 %a0, %a0, 0f3F800000;\nadd.f32 %a1, %a1, 0f3F800000;\nadd.f32 %a2, %a2, 0f3F800000;\nadd.f32 %a3, %a3, 0f3F800000;\nrcp.approx.f32 %a0, %a0;\nrcp.approx.f32 %a1, %a1;\nrcp.approx.f32 %a2, %a2;\nrcp.approx.f32 %a3, %a3;\nmul.f32 %v0, %v0, %a0;\nmul.f32 %v1, %v1, %a1;\nmul.f32 %v2, %v2, %a2;\nmul.f32 %v3, %v3, %a3;\n// Round to half and store all four results without a mask.\ncvt.rn.f16.f32 %h4, %v0;\ncvt.rn.f16.f32 %h5, %v1;\ncvt.rn.f16.f32 %h6, %v2;\ncvt.rn.f16.f32 %h7, %v3;\nmov.b32 %p2, {%h4, %h5};\nmov.b32 %p3, {%h6, %h7};\nst.global.v2.b32 [%y], {%p2, %p3};\nret;\n}",
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  },
+  "ptx_hyperparameters": {
+    "num_threads_x": 256,
+    "num_threads_y": 1,
+    "num_threads_z": 1
+  }
+}

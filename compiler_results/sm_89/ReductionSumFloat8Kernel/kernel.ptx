@@ -1,0 +1,56 @@
+.version 8.7
+.target sm_89
+.address_size 64
+
+.extern .shared .align 16 .b8 global_smem[];
+
+.visible .entry kernel(
+    .param .u64 x_ptr,
+    .param .u64 output_ptr,
+    .param .u64 dummy_ptr1,
+    .param .u64 dummy_ptr2
+)
+{
+    .reg .pred %p<2>;
+    .reg .b32 %r<10>;
+    .reg .b64 %rd<4>;
+    .reg .f32 %f<6>;
+
+    // The first warp loads 16 bytes per lane, covering the entire tile.
+    mov.u32 %r0, %tid.x;
+    setp.ge.u32 %p0, %r0, 32;
+    @%p0 bra DONE;
+    ld.param.u64 %rd0, [x_ptr];
+    ld.param.u64 %rd1, [output_ptr];
+    mov.u32 %r1, %ctaid.x;
+    mov.u32 %r2, %ctaid.y;
+    mad.lo.u32 %r3, %r2, 8, %r1;
+    mad.lo.u32 %r3, %r3, 32, %r0;
+    mad.wide.u32 %rd2, %r3, 16, %rd0;
+
+    // Coalesced vector loads supply packed E4M3 tensor-core operands.
+    ld.global.cg.v4.u32 {%r4, %r5, %r6, %r7}, [%rd2];
+    mov.b32 %r8, 0x38383838;
+    mov.f32 %f4, 0f00000000;
+
+    // Prepare the row output address while the input load completes.
+    mad.wide.u32 %rd3, %r2, 4, %rd1;
+    setp.eq.u32 %p1, %r0, 0;
+
+    // FP8 multiplication by one computes sixteen FP32 row sums.
+    mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 {%f0, %f1, %f2, %f3}, {%r4, %r5, %r6, %r7}, {%r8, %r8}, {%f4, %f4, %f4, %f4};
+
+    // Ignore duplicate columns and reduce the sixteen distinct rows.
+    add.f32 %f0, %f0, %f2;
+    shfl.sync.bfly.b32 %f5, %f0, 16, 31, -1;
+    add.f32 %f0, %f0, %f5;
+    shfl.sync.bfly.b32 %f5, %f0, 8, 31, -1;
+    add.f32 %f0, %f0, %f5;
+    shfl.sync.bfly.b32 %f5, %f0, 4, 31, -1;
+    add.f32 %f0, %f0, %f5;
+
+    // Only lane zero atomically contributes this program's tile sum.
+    @%p1 red.relaxed.gpu.global.add.f32 [%rd3], %f0;
+DONE:
+    ret;
+}
