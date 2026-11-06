@@ -1,0 +1,40 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+# CUDA image for reference captures, built by containers/build-cuda.sh. Torch and Triton
+# match amd/requirements-rocm.txt, with only the ROCm build swapped for CUDA. CUDA_TAG is
+# the wheel index the node's driver supports. Driver libraries come from the host at run
+# time (--nv), never from the image.
+
+%labels
+    Project triton_ai_compiler
+    CudaTag {{ CUDA_TAG }}
+
+%post
+    set -eu
+    # apt cannot switch to the _apt user under --fakeroot, so keep apt as (fake) root.
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-no-sandbox-user
+    apt-get update
+    # libatomic1 is required by torch's libraries and absent from minimal ubuntu:22.04.
+    apt-get install -y --no-install-recommends ca-certificates curl libatomic1
+    rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv UV_NO_MODIFY_PATH=1 sh
+    UV_PYTHON_INSTALL_DIR=/opt/python /opt/uv/uv python install 3.12
+    UV_PYTHON_INSTALL_DIR=/opt/python /opt/uv/uv venv --python 3.12 /opt/venv
+
+    mkdir -p /opt/locks
+    /opt/uv/uv pip install --python /opt/venv/bin/python --no-cache \
+        --index-url https://download.pytorch.org/whl/{{ CUDA_TAG }} \
+        --extra-index-url https://pypi.org/simple \
+        --index-strategy unsafe-best-match \
+        "torch==2.10.0+{{ CUDA_TAG }}" triton==3.6.0 numpy==2.5.4
+    /opt/uv/uv pip freeze --python /opt/venv/bin/python > /opt/locks/frozen.txt
+    /opt/venv/bin/python -c "import torch, triton; assert torch.version.cuda, 'torch has no CUDA'; assert triton.__version__ == '3.6.0', triton.__version__; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__)"
+
+%environment
+    export PATH=/opt/venv/bin:/opt/uv:$PATH
+    export PYTHONNOUSERSITE=1
+
+%runscript
+    exec "$@"

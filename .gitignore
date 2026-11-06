@@ -27,3 +27,7 @@ matmul/direct_cutlass_kernel_fp16
 /kernels_best/
 /astra/
 /final_ptx/
+/logs/
+/containers/*.sif
+/containers/*.sif.sha256
+/containers/.singularity-cache/
