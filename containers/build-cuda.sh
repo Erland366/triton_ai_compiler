@@ -23,7 +23,11 @@ export SINGULARITY_TMPDIR="$build_tmp" TMPDIR="$build_tmp"
 export SINGULARITY_CACHEDIR="$PWD/.singularity-cache"
 mkdir -p "$SINGULARITY_CACHEDIR"
 
+# Build under a temporary name, so an interrupted build never leaves a file that
+# check_a100.sbatch would take for a finished image.
 sif="triton-$cuda_tag.sif"
-singularity build --fakeroot --force --build-arg "CUDA_TAG=$cuda_tag" "$sif" triton-cuda.def
+partial="$sif.partial"
+singularity build --fakeroot --force --build-arg "CUDA_TAG=$cuda_tag" "$partial" triton-cuda.def
+mv "$partial" "$sif"
 sha256sum "$sif" > "$sif.sha256"
 singularity exec --cleanenv "$sif" cat /opt/locks/frozen.txt > "triton-$cuda_tag.frozen.txt"
