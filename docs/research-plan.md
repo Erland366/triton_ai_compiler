@@ -26,6 +26,8 @@ Three outcomes count as answers:
 | Kernels | New BF16 kernels in this repo: MatMul (BF16 and FP32 output), ReductionSum (FP32 output), GELU (BF16 and FP32 output). FP16 and Float8 wait |
 | ReductionSum design | The reference is `ReductionSumBF16PerRowOutputFloat32` (one tile per row, plain store). The `atomic_add` version is kept only as a kernel that cannot be a reference: with more than two tiles per row it did not repeat on either vendor (19 of 19 repeats differed on A100 and MI210 at block sizes 1024 and 32, 0 of 19 at 2048). Checked 2026-11-08 |
 | Test inputs | 16 development and 16 sealed, half random and half adversarial, with different values on each side, stored as data |
+| Adversarial inputs | Agreed for now and open to revision. All kernels: subnormals, signed zeros, BF16's largest and smallest normals, and values exactly halfway between two BF16 numbers before rounding. MatMul: cancelling large values, constant rows, dot products near a rounding boundary. ReductionSum: cancelling large values, ascending and descending rows. GELU: values near 0, around ±3 to ±10, and near the output's subnormal-to-normal switch. NaN and infinity go in a separate set |
+| Autotuning the reference | Reject a config only if it fails to run. Pick the lowest median latency among the rest, and record every config's latency and output hash. No tolerance filter |
 | Candidate freedom | Any tile order or warp layout |
 | Portability cost denominator | Autotuned native AMD Triton as the headline, with the reference's forced config as a secondary number |
 | Baseline | A deterministic emulation baseline, then the agent on top. The user writes the first probe, and we pair on the rest |
