@@ -24,6 +24,7 @@ Three outcomes count as answers:
 | H200 | Replication with the same probes, kept as a separate reference if the bits differ |
 | Configs | The A100 autotuned config first, with the kernel default as the first held-out config. More held-out configs follow |
 | Kernels | New BF16 kernels in this repo: MatMul (BF16 and FP32 output), ReductionSum (FP32 output), GELU (BF16 and FP32 output). FP16 and Float8 wait |
+| ReductionSum design | The reference is `ReductionSumBF16PerRowOutputFloat32` (one tile per row, plain store). The `atomic_add` version is kept only as a kernel that cannot be a reference: with more than two tiles per row it did not repeat on either vendor (19 of 19 repeats differed on A100 and MI210 at block sizes 1024 and 32, 0 of 19 at 2048). Checked 2026-11-08 |
 | Test inputs | 16 development and 16 sealed, half random and half adversarial, with different values on each side, stored as data |
 | Candidate freedom | Any tile order or warp layout |
 | Portability cost denominator | Autotuned native AMD Triton as the headline, with the reference's forced config as a secondary number |
