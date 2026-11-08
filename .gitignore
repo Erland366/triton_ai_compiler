@@ -32,3 +32,4 @@ matmul/direct_cutlass_kernel_fp16
 /containers/*.sif.sha256
 /containers/.singularity-cache/
 /containers/*.sif.partial
+/captures/

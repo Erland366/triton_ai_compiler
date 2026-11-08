@@ -6,6 +6,7 @@ import triton.language as tl
 
 
 class MatrixMultiplicationBF16OutputBF16:
+    input_family = "matmul"
     tuning_options = MappingProxyType(
         {
             "block_m": (32, 64, 128, 256),
@@ -69,7 +70,7 @@ class MatrixMultiplicationBF16OutputBF16:
             triton.cdiv(a.shape[0], self.config["block_m"]),
             triton.cdiv(b.shape[1], self.config["block_n"]),
         )
-        self.kernel[grid](
+        self.last_launch = self.kernel[grid](
             a,
             b,
             c,
@@ -90,6 +91,7 @@ class MatrixMultiplicationBF16OutputBF16:
 
 
 class MatrixMultiplicationBF16OutputFloat32:
+    input_family = "matmul"
     tuning_options = MappingProxyType(
         {
             "block_m": (32, 64, 128, 256),
@@ -152,7 +154,7 @@ class MatrixMultiplicationBF16OutputFloat32:
             triton.cdiv(a.shape[0], self.config["block_m"]),
             triton.cdiv(b.shape[1], self.config["block_n"]),
         )
-        self.kernel[grid](
+        self.last_launch = self.kernel[grid](
             a,
             b,
             c,

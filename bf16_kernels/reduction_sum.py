@@ -8,6 +8,7 @@ import triton.language as tl
 class ReductionSumBF16OutputFloat32:
     size = 4096
     batch_size = 256
+    input_family = "reduction"
     tuning_options = MappingProxyType(
         {
             "block_size": (32, 64, 128, 256, 512, 1024, 2048),
@@ -36,7 +37,7 @@ class ReductionSumBF16OutputFloat32:
     def forward(self, x):
         output = torch.zeros(self.batch_size, device=x.device, dtype=torch.float32)
         grid = (triton.cdiv(self.size, self.config["block_size"]), self.batch_size)
-        self.kernel[grid](
+        self.last_launch = self.kernel[grid](
             x,
             output,
             BLOCK_SIZE=self.config["block_size"],
@@ -51,6 +52,7 @@ class ReductionSumBF16OutputFloat32:
 class ReductionSumBF16PerRowOutputFloat32:
     size = 4096
     batch_size = 256
+    input_family = "reduction"
     tuning_options = MappingProxyType({"num_warps": (4, 8, 16)})
     default_config = MappingProxyType({"num_warps": 4})
 
@@ -72,7 +74,7 @@ class ReductionSumBF16PerRowOutputFloat32:
 
     def forward(self, x):
         output = torch.empty(self.batch_size, device=x.device, dtype=torch.float32)
-        self.kernel[(self.batch_size,)](
+        self.last_launch = self.kernel[(self.batch_size,)](
             x,
             output,
             BLOCK_SIZE=self.size,

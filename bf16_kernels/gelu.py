@@ -8,6 +8,7 @@ import triton.language as tl
 class GELUBF16OutputBF16:
     size = 4096
     batch_size = 256
+    input_family = "gelu"
     tuning_options = MappingProxyType(
         {
             "block_size": (32, 64, 128, 256, 512, 1024, 2048),
@@ -36,7 +37,9 @@ class GELUBF16OutputBF16:
 
     def forward(self, x):
         output = torch.empty_like(x)
-        self.kernel[(triton.cdiv(x.numel(), self.config["block_size"]),)](
+        self.last_launch = self.kernel[
+            (triton.cdiv(x.numel(), self.config["block_size"]),)
+        ](
             x,
             output,
             BLOCK_SIZE=self.config["block_size"],
@@ -51,6 +54,7 @@ class GELUBF16OutputBF16:
 class GELUBF16OutputFloat32:
     size = 4096
     batch_size = 256
+    input_family = "gelu"
     tuning_options = MappingProxyType(
         {
             "block_size": (32, 64, 128, 256, 512, 1024, 2048),
@@ -79,7 +83,9 @@ class GELUBF16OutputFloat32:
 
     def forward(self, x):
         output = torch.empty(x.shape, device=x.device, dtype=torch.float32)
-        self.kernel[(triton.cdiv(x.numel(), self.config["block_size"]),)](
+        self.last_launch = self.kernel[
+            (triton.cdiv(x.numel(), self.config["block_size"]),)
+        ](
             x,
             output,
             BLOCK_SIZE=self.config["block_size"],

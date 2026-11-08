@@ -19,3 +19,13 @@ KERNELS = {
         GELUBF16OutputFloat32,
     )
 }
+
+# ReductionSumBF16OutputFloat32 adds tiles with atomic_add and does not repeat on either
+# vendor, so it cannot be a reference (docs/research-plan.md).
+REFERENCE_KERNELS = (
+    "MatrixMultiplicationBF16OutputBF16",
+    "MatrixMultiplicationBF16OutputFloat32",
+    "ReductionSumBF16PerRowOutputFloat32",
+    "GELUBF16OutputBF16",
+    "GELUBF16OutputFloat32",
+)

@@ -57,6 +57,7 @@ The user approves steps 3, 4, and 7 before they run.
 - **CPU emulator:** the user wants time to think about it. It is most likely to return if the stop rule triggers without a match.
 - **Comparison with the Triton AI Compiler paper:** no longer a priority.
 - **Agents without bit diffs:** a possible later experiment on whether the diffs help.
+- **Natural NVIDIA kernels that do not repeat** (raised by the user on 2026-11-08): making the reference deterministic, as with the per-row ReductionSum, gives an output that real NVIDIA code does not produce. Matching one fixed output is undefined for a kernel like `atomic_add`, so this needs its own experiment design. One starting idea: call an AMD output valid if it equals one of the outputs NVIDIA can produce, such as one order of the atomic additions.
 
 ## Evidence this plan rests on
 
