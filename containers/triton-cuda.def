@@ -16,7 +16,8 @@ From: ubuntu:22.04
     echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-no-sandbox-user
     apt-get update
     # libatomic1 is required by torch's libraries and absent from minimal ubuntu:22.04.
-    apt-get install -y --no-install-recommends ca-certificates curl libatomic1
+    # gcc and libc6-dev: Triton compiles a C launcher for each kernel at first launch.
+    apt-get install -y --no-install-recommends ca-certificates curl libatomic1 gcc libc6-dev
     rm -rf /var/lib/apt/lists/*
 
     curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv UV_NO_MODIFY_PATH=1 sh
@@ -30,6 +31,8 @@ From: ubuntu:22.04
         --index-strategy unsafe-best-match \
         "torch==2.10.0+{{ CUDA_TAG }}" triton==3.6.0 numpy==2.5.4
     /opt/uv/uv pip freeze --python /opt/venv/bin/python > /opt/locks/frozen.txt
+    gcc --version | head -1
+    test -f "$(/opt/venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["include"])')/Python.h"
     /opt/venv/bin/python -c "import torch, triton; assert torch.version.cuda, 'torch has no CUDA'; assert triton.__version__ == '3.6.0', triton.__version__; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'triton', triton.__version__)"
 
 %environment
