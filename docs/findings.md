@@ -25,3 +25,26 @@ The same sweep on MI210 found the same dependence on config as A100. Every MatMu
 This compares MI210 with itself only and says nothing yet about MI210 against A100. It does mean that, for MatMul and GELU, comparing one config per vendor covers every config.
 
 Evidence: `capture/config_sweep.py` on one MI210 (`auh7-1b-gpu-296`, job 354563, uncommitted tree at `2ba26f4`), output `logs/mi210_config_sweep.json` (untracked).
+
+## F4: First comparison of native MI210 Triton with the A100 reference (2026-11-09)
+
+Native Triton 3.6.0 on one MI210, run at each A100 config on the regenerated test inputs and compared bit for bit with capture `a100-ref-381110`. Tuned and held-out configs gave the same results, except ReductionSum, whose warp count changes its bits on both vendors.
+
+| Kernel | Random inputs, values bit-equal | Whole outputs identical (dev + sealed) | Notes |
+|---|---|---|---|
+| GELU, BF16 output | 100% | 32 of 32, all special inputs too | Already matches, including every finite BF16 input value |
+| GELU, FP32 output | 86.97% | 6 of 32 | Differences of up to 3,776 steps, likely from the `erf` implementations; the BF16 rounding hides them all |
+| MatMul, BF16 output | 99.74% | 4 of 32 (the halfway cases) | |
+| MatMul, FP32 output | 0.36% | 4 of 32 (the halfway cases) | Nearly every value differs, consistent with a different accumulation inside the matrix instructions |
+| ReductionSum per row | 72.80% (8 warps) | 4 of 32 (subnormal and constant rows) | Sorted rows only 65 to 67% equal |
+
+Patterns worth following up, all hypotheses:
+
+- **Halfway MatMul cases match exactly on both outputs.** Their sums are exact in FP32, so this suggests both vendors round FP32 to BF16 the same way, and the MatMul differences come from accumulation.
+- **The `tiny` MatMul case differs almost everywhere** (0.43% bit-equal with BF16 output, 0% with FP32), while ReductionSum's subnormal rows match exactly. Products land near the bottom of FP32's normal range, so the matrix instructions may handle subnormals differently between vendors, while ordinary additions do not.
+- **NaN payloads differ in FP32 outputs.** On the special inputs, NaN positions agree everywhere, but MatMul and ReductionSum FP32 NaNs have different bits. By the agreed definition these count, since A100 repeats them.
+- **Cancelling inputs differ everywhere**, as expected, since cancellation magnifies any difference in order.
+
+Step counts mislead near zero, where a small absolute difference spans many representable values.
+
+Evidence: `capture/compare.py` at commit `93bc84e` on `auh7-1b-gpu-296` (job 354563, GPU 0), output `logs/compare_mi210_vs_a100-ref-381110.json` (untracked).
