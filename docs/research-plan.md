@@ -22,7 +22,7 @@ Three outcomes count as answers:
 | Near-misses | Invalid candidates are logged and plotted with latency, mismatch rate, and difference in representable steps, plus how many fall within 1e-7 and 1e-6 on FP32 outputs |
 | Reference | A pinned A100 Triton capture, which must repeat bit for bit on A100 |
 | H200 | Replication with the same probes, kept as a separate reference if the bits differ |
-| Configs | The A100 autotuned config first, with the kernel default as the first held-out config. More held-out configs follow |
+| Configs | The A100 autotuned config first, with the kernel default as the first held-out config, or the second-fastest if the default wins. More held-out configs follow. A held-out config must give different output bits from the tuned config on most test inputs. For capture `a100-ref-381110` this is not yet checked: each config repeated on its own, but the two configs' output hashes have not been compared |
 | Kernels | New BF16 kernels in this repo: MatMul (BF16 and FP32 output), ReductionSum (FP32 output), GELU (BF16 and FP32 output). FP16 and Float8 wait |
 | ReductionSum design | The reference is `ReductionSumBF16PerRowOutputFloat32` (one tile per row, plain store). The `atomic_add` version is kept only as a kernel that cannot be a reference: with more than two tiles per row it did not repeat on either vendor (19 of 19 repeats differed on A100 and MI210 at block sizes 1024 and 32, 0 of 19 at 2048). Checked 2026-11-08 |
 | Test inputs | 16 development and 16 sealed, half random and half adversarial, with different values on each side, stored as data |

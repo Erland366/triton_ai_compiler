@@ -21,7 +21,7 @@ The recorded launch and tuning parameters that a Triton kernel ran with for a re
 _Avoid_: Autotuner output, best config
 
 **Held-out config**:
-A tuned config with a reference capture that was not used to develop a candidate or method, and is used to test whether the method generalizes.
+A tuned config with a reference capture that was not used to develop a candidate or method, and is used to test whether the method generalizes. It must give different output bits from the tuned config on most test inputs, or matching one would match the other for free.
 _Avoid_: New config, any config
 
 **Test inputs**:
