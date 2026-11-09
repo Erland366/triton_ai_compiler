@@ -172,3 +172,21 @@ class MatrixMultiplicationBF16OutputFloat32:
     def forward_torch(self, inputs):
         a, b = inputs
         return torch.matmul(a.float(), b.float())
+
+
+class MatrixMultiplicationBF16OutputBF16K1024(MatrixMultiplicationBF16OutputBF16):
+    input_family = "matmul_k1024"
+
+    def random_input(self, generator):
+        a = torch.randn((4096, 1024), generator=generator, dtype=torch.float32)
+        b = torch.randn((1024, 4096), generator=generator, dtype=torch.float32)
+        return a.to(torch.bfloat16), b.to(torch.bfloat16)
+
+
+class MatrixMultiplicationBF16OutputFloat32K1024(MatrixMultiplicationBF16OutputFloat32):
+    input_family = "matmul_k1024"
+
+    def random_input(self, generator):
+        a = torch.randn((4096, 1024), generator=generator, dtype=torch.float32)
+        b = torch.randn((1024, 4096), generator=generator, dtype=torch.float32)
+        return a.to(torch.bfloat16), b.to(torch.bfloat16)

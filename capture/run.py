@@ -29,7 +29,7 @@ from triton.compiler.errors import CompilationError
 from triton.runtime.errors import OutOfResources
 from triton.testing import do_bench
 
-from bf16_kernels import KERNELS, REFERENCE_KERNELS
+from bf16_kernels import HELD_OUT_SHAPE_KERNELS, KERNELS, REFERENCE_KERNELS
 from capture.inputs import autotune_input, test_inputs
 
 LAUNCHES_PER_INPUT = 3
@@ -44,7 +44,9 @@ def parse_args():
     )
     parser.add_argument("--name", required=True)
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--kernels", nargs="+", choices=REFERENCE_KERNELS)
+    parser.add_argument(
+        "--kernels", nargs="+", choices=REFERENCE_KERNELS + HELD_OUT_SHAPE_KERNELS
+    )
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
 

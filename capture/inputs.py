@@ -6,13 +6,15 @@ cases follow docs/research-plan.md. Inputs are regenerated rather than copied be
 machines, so each capture records their SHA-256 for the other side to check.
 """
 
+import functools
 import zlib
 
 import torch
 
 BF16_MIN_SUBNORMAL = 2.0**-133
 BF16_MIN_NORMAL = 2.0**-126
-MATMUL_SHAPE = (4096, 4096)
+MATMUL_DIMS = (4096, 4096, 4096)
+MATMUL_K1024_DIMS = (4096, 1024, 4096)
 ROWS_SHAPE = (256, 4096)
 RANDOM_PER_SET = 8
 NAN_BITS = (0x7FC0, 0x7FC1, 0x7F81, 0xFFC0, 0xFF81)
@@ -81,25 +83,27 @@ def inject_specials(tensor, gen, bit_patterns, fraction):
     return torch.where(mask, patterns[choice], bits).view(torch.bfloat16)
 
 
-def matmul_random(gen):
-    return randn(MATMUL_SHAPE, gen), randn(MATMUL_SHAPE, gen)
+def matmul_random(gen, dims):
+    m, k, n = dims
+    return randn((m, k), gen), randn((k, n), gen)
 
 
-def matmul_subnormals(gen):
-    a = mix(randn(MATMUL_SHAPE, gen), subnormals(MATMUL_SHAPE, gen), 0.5, gen)
-    return a, randn(MATMUL_SHAPE, gen)
+def matmul_subnormals(gen, dims):
+    m, k, n = dims
+    a = mix(randn((m, k), gen), subnormals((m, k), gen), 0.5, gen)
+    return a, randn((k, n), gen)
 
 
-def matmul_zeros_and_min_normals(gen):
-    return zeros_and_min_normals(MATMUL_SHAPE, gen), zeros_and_min_normals(
-        MATMUL_SHAPE, gen
-    )
+def matmul_zeros_and_min_normals(gen, dims):
+    m, k, n = dims
+    return zeros_and_min_normals((m, k), gen), zeros_and_min_normals((k, n), gen)
 
 
-def matmul_cancelling(gen):
-    a, b = randn(MATMUL_SHAPE, gen), randn(MATMUL_SHAPE, gen)
+def matmul_cancelling(gen, dims):
+    m, k, n = dims
+    a, b = randn((m, k), gen), randn((k, n), gen)
     b[1::2] = b[0::2]
-    half = (MATMUL_SHAPE[0], MATMUL_SHAPE[1] // 2)
+    half = (m, k // 2)
     large = (2.0**40 * uniform(half, gen, 1.0, 2.0)).to(torch.bfloat16).float()
     mask = torch.rand(half, generator=gen) < 0.25
     a[:, 0::2] = torch.where(mask, large, a[:, 0::2])
@@ -107,47 +111,78 @@ def matmul_cancelling(gen):
     return a, b
 
 
-def matmul_constant_rows(gen):
-    a = randn((MATMUL_SHAPE[0], 1), gen).expand(MATMUL_SHAPE).contiguous()
-    return a, randn(MATMUL_SHAPE, gen)
+def matmul_constant_rows(gen, dims):
+    m, k, n = dims
+    a = randn((m, 1), gen).expand((m, k)).contiguous()
+    return a, randn((k, n), gen)
 
 
-def sparse_offsets(gen, density, magnitudes):
-    choice = torch.randint(0, len(magnitudes), MATMUL_SHAPE, generator=gen)
-    values = signs(MATMUL_SHAPE, gen) * torch.tensor(magnitudes)[choice]
-    mask = torch.rand(MATMUL_SHAPE, generator=gen) < density
-    return torch.where(mask, values, torch.zeros(MATMUL_SHAPE))
+def sparse_offsets(gen, shape, density, magnitudes):
+    choice = torch.randint(0, len(magnitudes), shape, generator=gen)
+    values = signs(shape, gen) * torch.tensor(magnitudes)[choice]
+    mask = torch.rand(shape, generator=gen) < density
+    return torch.where(mask, values, torch.zeros(shape))
 
 
-def matmul_halfway(gen):
+def matmul_halfway(gen, dims):
+    m, k, n = dims
     magnitudes = [1.0, 2.0**-6, 2.0**-7, 2.0**-8]
-    a = sparse_offsets(gen, 4 / MATMUL_SHAPE[1], magnitudes)
-    return a, signs(MATMUL_SHAPE, gen)
+    a = sparse_offsets(gen, (m, k), 4 / k, magnitudes)
+    return a, signs((k, n), gen)
 
 
-def matmul_halfway_scaled(gen):
-    a, b = matmul_halfway(gen)
-    exponents = torch.randint(-60, 61, (MATMUL_SHAPE[0], 1), generator=gen).float()
+def matmul_halfway_scaled(gen, dims):
+    a, b = matmul_halfway(gen, dims)
+    exponents = torch.randint(-60, 61, (dims[0], 1), generator=gen).float()
     return a * torch.exp2(exponents), b
 
 
-def matmul_large(gen):
-    return randn(MATMUL_SHAPE, gen) * 2.0**56, randn(MATMUL_SHAPE, gen) * 2.0**56
+def matmul_large(gen, dims):
+    m, k, n = dims
+    return randn((m, k), gen) * 2.0**56, randn((k, n), gen) * 2.0**56
 
 
-def matmul_tiny(gen):
-    return randn(MATMUL_SHAPE, gen) * 2.0**-63, randn(MATMUL_SHAPE, gen) * 2.0**-63
+def matmul_tiny(gen, dims):
+    m, k, n = dims
+    return randn((m, k), gen) * 2.0**-63, randn((k, n), gen) * 2.0**-63
 
 
-def matmul_special_nan(gen):
-    a = inject_specials(randn(MATMUL_SHAPE, gen), gen, NAN_BITS + INF_BITS, 0.01)
-    return a, randn(MATMUL_SHAPE, gen)
+def matmul_special_nan(gen, dims):
+    m, k, n = dims
+    a = inject_specials(randn((m, k), gen), gen, NAN_BITS + INF_BITS, 0.01)
+    return a, randn((k, n), gen)
 
 
-def matmul_special_inf(gen):
-    a = inject_specials(randn(MATMUL_SHAPE, gen), gen, INF_BITS, 0.001)
-    b = inject_specials(randn(MATMUL_SHAPE, gen), gen, INF_BITS, 0.001)
+def matmul_special_inf(gen, dims):
+    m, k, n = dims
+    a = inject_specials(randn((m, k), gen), gen, INF_BITS, 0.001)
+    b = inject_specials(randn((k, n), gen), gen, INF_BITS, 0.001)
     return a, b
+
+
+def matmul_family(dims):
+    def bind(case):
+        bound = functools.partial(case, dims=dims)
+        bound.__name__ = case.__name__
+        return bound
+
+    return {
+        "random": bind(matmul_random),
+        "adversarial": tuple(
+            bind(case)
+            for case in (
+                matmul_subnormals,
+                matmul_zeros_and_min_normals,
+                matmul_cancelling,
+                matmul_constant_rows,
+                matmul_halfway,
+                matmul_halfway_scaled,
+                matmul_large,
+                matmul_tiny,
+            )
+        ),
+        "special": (bind(matmul_special_nan), bind(matmul_special_inf)),
+    }
 
 
 def rows_random(gen):
@@ -233,20 +268,8 @@ def gelu_all_finite_bf16(gen):
 
 
 FAMILIES = {
-    "matmul": {
-        "random": matmul_random,
-        "adversarial": (
-            matmul_subnormals,
-            matmul_zeros_and_min_normals,
-            matmul_cancelling,
-            matmul_constant_rows,
-            matmul_halfway,
-            matmul_halfway_scaled,
-            matmul_large,
-            matmul_tiny,
-        ),
-        "special": (matmul_special_nan, matmul_special_inf),
-    },
+    "matmul": matmul_family(MATMUL_DIMS),
+    "matmul_k1024": matmul_family(MATMUL_K1024_DIMS),
     "reduction": {
         "random": rows_random,
         "adversarial": (

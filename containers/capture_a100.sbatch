@@ -9,9 +9,11 @@
 #SBATCH --output=logs/capture_a100_%j.out
 # Reference capture of the BF16 kernels on one A100 (capture/run.py). It needs the image
 # from check_a100.sbatch and a clean checkout, and writes captures/a100-ref-<job>/.
-# Submit from the repository root:
+# Submit from the repository root. Extra arguments go to capture/run.py, for example
+# --kernels to capture only some kernels:
 #
 #   mkdir -p logs && sbatch containers/capture_a100.sbatch
+#   sbatch containers/capture_a100.sbatch --kernels MatrixMultiplicationBF16OutputBF16K1024 MatrixMultiplicationBF16OutputFloat32K1024
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?error: submit this with sbatch}"
 sif="$PWD/containers/triton-cu126.sif"
@@ -34,6 +36,6 @@ singularity exec --nv --cleanenv --no-mount tmp,cwd \
   --env "TRITON_CACHE_DIR=/tmp/triton-cache" \
   --env "CAPTURE_GIT_COMMIT=$commit" --env "CAPTURE_GIT_DIRTY=0" \
   --env "SLURM_JOB_ID=$SLURM_JOB_ID" \
-  "$sif" python -m capture.run --name "a100-ref-$SLURM_JOB_ID" --out captures
+  "$sif" python -m capture.run --name "a100-ref-$SLURM_JOB_ID" --out captures "$@"
 cat "$sif.sha256" > "captures/a100-ref-$SLURM_JOB_ID/image.sha256"
 du -sh "captures/a100-ref-$SLURM_JOB_ID"
