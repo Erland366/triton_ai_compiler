@@ -48,3 +48,17 @@ Patterns worth following up, all hypotheses:
 Step counts mislead near zero, where a small absolute difference spans many representable values.
 
 Evidence: `capture/compare.py` at commit `93bc84e` on `auh7-1b-gpu-296` (job 354563, GPU 0), output `logs/compare_mi210_vs_a100-ref-381110.json` (untracked).
+
+## F5: MI210's matrix instructions flush subnormals, A100's keep them (2026-11-09)
+
+Setting Triton's AMD option `allow_flush_denorm` changed the compiled kernel's FP32 denormal mode (`.amdhsa_float_denorm_mode_32` from 3 to 0) but changed no output bit of either MatMul kernel, on the random, subnormal or tiny inputs. On the tiny case (inputs scaled by 2^-63, so 79% of products fall below 2^-126), with FP32 output and the first 256 rows measured against float64 sums of the same BF16 inputs:
+
+| | Zero outputs | Subnormal outputs | Median relative error |
+|---|---|---|---|
+| float64 sums | 0% | 1.24% | none (the yardstick) |
+| A100 | 0% | 1.24% | 4.7e-6 |
+| MI210 | 1.19% | 0% | 0.38 |
+
+So A100 keeps subnormal products and sums, and MI210's matrix instructions flush them whatever the denormal mode. This is read from outputs, not confirmed in AMD's documentation. Ordinary FP32 additions on MI210 keep subnormals (ReductionSum's subnormal rows matched A100 exactly, F4), so matching A100 for small values needs a path other than the native matrix instructions.
+
+Evidence: `amd/denorm_probe.py` and a float64 check of `development_15_tiny`, both on `auh7-1b-gpu-296` GPU 0, against `captures/a100-ref-381110`.
