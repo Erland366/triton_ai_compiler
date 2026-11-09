@@ -65,7 +65,7 @@ class MatrixMultiplicationBF16OutputBF16:
 
     def forward(self, inputs):
         a, b = inputs
-        c = torch.empty_like(a)
+        c = torch.empty((a.shape[0], b.shape[1]), device=a.device, dtype=torch.bfloat16)
         grid = (
             triton.cdiv(a.shape[0], self.config["block_m"]),
             triton.cdiv(b.shape[1], self.config["block_n"]),
