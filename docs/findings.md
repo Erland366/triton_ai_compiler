@@ -62,3 +62,17 @@ Setting Triton's AMD option `allow_flush_denorm` changed the compiled kernel's F
 So A100 keeps subnormal products and sums, and MI210's matrix instructions flush them whatever the denormal mode. AMD documents this: "On the MI200, MFMA_F16, MFMA_BF16, and MFMA_BF16_1K flush subnormal input/output data to zero" (MIOpen, `docs/conceptual/MI200-alt-implementation.rst`, read 2026-11-10; the same text appears in ROCm docs since 5.0.2). Our kernel uses `v_mfma_f32_32x32x8bf16_1k`. The documentation says inputs and outputs; that intermediate products are flushed too is inferred from our outputs. PyTorch's numerical accuracy notes reportedly add that FP32 and FP64 MFMA do not flush and that no alternate BF16 path exists (seen only in a search summary, not read directly). No NVIDIA documentation on `mma` subnormal handling was found; A100's behavior here rests on our measurement. Ordinary FP32 additions on MI210 keep subnormals (ReductionSum's subnormal rows matched A100 exactly, F4), so matching A100 for small values needs a path other than the native matrix instructions.
 
 Evidence: `amd/denorm_probe.py` and a float64 check of `development_15_tiny`, both on `auh7-1b-gpu-296` GPU 0, against `captures/a100-ref-381110`.
+
+## F6: Direct test: A100's BF16 tensor cores keep subnormals, MI210's BF16 MFMA flushes them (2026-11-12)
+
+`probes/subnormal.py` builds 32x32x32 products whose outputs have two exactly known values, one if subnormals are kept and one if they are flushed: a subnormal product, a subnormal BF16 input, 32 subnormal products summing to a normal value, and a normal value plus a subnormal product, with an all-normal control. Every output of every case matched one of the two values exactly.
+
+| Path | A100 | MI210 |
+|---|---|---|
+| `tl.dot`, BF16 inputs | kept, all 4 cases (`mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32`) | flushed, all 4 cases (`v_mfma_f32_32x32x8bf16_1k`) |
+| `tl.dot`, FP32 inputs, IEEE | kept (`fma.rn.f32`, no tensor cores) | kept (`v_mfma_f32_32x32x2f32`) |
+| loop of FP32 multiply-adds | kept (`fma.rn.f32`) | kept (`v_pk_fma_f32`) |
+
+This confirms F5 directly on both vendors, and confirms on MI210 that the FP32 matrix instruction keeps subnormals. BF16 values are exact in FP32, so an MI210 kernel can feed BF16 inputs to `v_mfma_f32_32x32x2f32` and keep subnormals; whether its summation order matches A100's is untested.
+
+Evidence: A100 job 388887 (`gpu-49`, GPU 0, commit `13e59c4`, image `fa21051f…`), log `logs/probe_a100_388887.out`; MI210 on `auh7-1b-gpu-296` (job 354563, GPU 0, commit `13e59c4`), `logs/subnormal_mi210_354563.json`. Both untracked.
