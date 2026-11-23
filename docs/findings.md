@@ -76,3 +76,16 @@ Evidence: `amd/denorm_probe.py` and a float64 check of `development_15_tiny`, bo
 This confirms F5 directly on both vendors, and confirms on MI210 that the FP32 matrix instruction keeps subnormals. BF16 values are exact in FP32, so an MI210 kernel can feed BF16 inputs to `v_mfma_f32_32x32x2f32` and keep subnormals; whether its summation order matches A100's is untested.
 
 Evidence: A100 job 388887 (`gpu-49`, GPU 0, commit `13e59c4`, image `fa21051f…`), log `logs/probe_a100_388887.out`; MI210 on `auh7-1b-gpu-296` (job 354563, GPU 0, commit `13e59c4`), `logs/subnormal_mi210_354563.json`. Both untracked.
+
+## F7: At K=1024 the pattern is the same, with less disagreement (2026-11-23)
+
+Capture `a100-ref-388901` holds both MatMul kernels at K=1024 (M=N=4096). On A100 the config again does not change the bits: all 153 configs that ran gave one output hash, and tuned and held-out configs were identical on 34 of 34 inputs. Native MI210 against it, with K=4096 (F4) for comparison, on the random development inputs:
+
+| Kernel | K=4096 bit-equal | K=1024 bit-equal | K=1024 within 1 step |
+|---|---|---|---|
+| MatMul, BF16 output | 99.744% | 99.941% | 99.996% |
+| MatMul, FP32 output | 0.357% | 2.177% | 5.451% |
+
+The halfway cases still match exactly, and the `tiny` case still differs almost everywhere (0.44% with BF16 output, 0% with FP32), as subnormal flushing (F5, F6) predicts. A shorter sum gives fewer chances for the two accumulation orders to round differently, which fits the higher agreement.
+
+Evidence: capture job 388901 (`gpu-53`, GPU 2, commit `13e59c4`), checksums and input regeneration verified on MI210; `capture/compare.py` at commit `17f3a8d` on `auh7-1b-gpu-296` (job 354563, GPU 0), output `logs/compare_mi210_vs_a100-ref-388901.json` (untracked).
