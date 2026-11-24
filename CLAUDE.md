@@ -12,6 +12,7 @@ Follow `AGENTS.md` for code style, tooling, and verification rules. `README.md` 
 - The AMD research in `docs/research-plan.md` runs on MI210 from `amd/requirements-rocm.txt` (`torch 2.10.0+rocm7.0`, `triton-rocm 3.6.0`). That environment does not include `ptx_gym`, so the NVIDIA commands below need their own CUDA environment.
 - NVIDIA runs for that research use the Singularity image from `containers/triton-cuda.def` (`torch 2.10.0+cu126`, `triton 3.6.0`). On the A100 cluster, submit `containers/check_a100.sbatch` from a checkout under `/nfs-stor/qirong.ho/erland`, which has no Apptainer or usable Podman store for this project. That cluster allows at most 3 jobs and 4 GPUs per user at a time (as of 2026-11-09), so 1-GPU jobs can run side by side, but never run benchmarks or autotuning in parallel.
 - To inject code on AMD, use `TRITON_KERNEL_OVERRIDE`, as `amd/check_injection.py` shows. `ir_override` is NVIDIA-only. Always set `TRITON_ALWAYS_COMPILE=1` for candidates: the cache key ignores override file contents, so an edited candidate can silently run the old kernel.
+- The AMD agent (`taic_amd/agent.py`) runs only inside the container from `containers/agent-rocm.def`, through `containers/agent_mi210.sh RUN_DIR LOGIN_DIR COMMAND`. The repository is read-only inside, so RUN_DIR must be outside it; `containers/breakout_test.py` checks the isolation. Use `--dry-run` to test the agent's tools without a model.
 - Model-generated PTX is untrusted low-level code. Run the agent only on isolated, non-production machines.
 
 ## Commands

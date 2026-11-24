@@ -1,0 +1,52 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+# Image the AMD agent runs in on MI210 (docs/adr/0002-restricted-claude-code-agent.md),
+# built by containers/build-agent.sh. Python packages match amd/requirements-rocm.txt
+# plus the agent's taic_amd/requirements.txt. The GPU comes from the host at run time
+# (apptainer --rocm); the ROCm libraries come from the torch wheel.
+
+%labels
+    Project triton_ai_compiler
+    Stage agent-rocm
+
+%files
+    ../amd/requirements-rocm.txt /opt/locks/requirements-rocm.txt
+    ../taic_amd/requirements.txt /opt/locks/requirements-agent.txt
+
+%post
+    set -eu
+    # apt cannot switch to the _apt user under --fakeroot, so keep apt as (fake) root.
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99-no-sandbox-user
+    # This cluster reaches the internet only through its proxy; tell apt explicitly.
+    echo 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/98-ipv4
+    proxy="${http_proxy:-${HTTP_PROXY:-${https_proxy:-${HTTPS_PROXY:-}}}}"
+    if [ -n "$proxy" ]; then
+        printf 'Acquire::http::Proxy "%s";\nAcquire::https::Proxy "%s";\n' \
+            "$proxy" "$proxy" > /etc/apt/apt.conf.d/97-proxy
+        echo "apt uses the build environment's proxy"
+    else
+        echo "no proxy in the build environment"
+    fi
+    apt-get update
+    # libatomic1 for torch; gcc and libc6-dev because Triton compiles a C launcher;
+    # patch for the agent's apply_patch tool.
+    apt-get install -y --no-install-recommends ca-certificates curl libatomic1 gcc libc6-dev patch
+    rm -rf /var/lib/apt/lists/* /etc/apt/apt.conf.d/97-proxy
+
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv UV_NO_MODIFY_PATH=1 sh
+    UV_PYTHON_INSTALL_DIR=/opt/python /opt/uv/uv python install 3.12
+    UV_PYTHON_INSTALL_DIR=/opt/python /opt/uv/uv venv --python 3.12 /opt/venv
+    export UV_CONCURRENT_DOWNLOADS=2 UV_HTTP_TIMEOUT=300
+    /opt/uv/uv pip install --python /opt/venv/bin/python --no-cache --index-strategy unsafe-best-match \
+        -r /opt/locks/requirements-rocm.txt -r /opt/locks/requirements-agent.txt
+    /opt/uv/uv pip freeze --python /opt/venv/bin/python > /opt/locks/frozen.txt
+    /opt/venv/bin/python -c "import torch, triton, claude_agent_sdk; assert torch.version.hip, 'torch has no ROCm'; print('torch', torch.__version__, 'hip', torch.version.hip, 'triton', triton.__version__, 'sdk', claude_agent_sdk.__version__)"
+    gcc --version | head -1
+
+%environment
+    export PATH=/opt/venv/bin:/opt/uv:$PATH
+    export PYTHONNOUSERSITE=1
+
+%runscript
+    exec "$@"
