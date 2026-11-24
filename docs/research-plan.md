@@ -16,8 +16,9 @@ Three outcomes count as answers:
 
 | Area | Decision |
 |---|---|
-| Objective | Bit equality is required, and speed is the objective. The paper's story is the trade-off between them |
-| Primary metric | Portability cost. For the agent, the latency of its fastest valid candidate against the emulation baseline, and whether it found a valid candidate at all |
+| Objective | Correctness first (revised 2026-11-24): bit equality is required, and speed counts only for candidates that are bit-exact. The paper's story is the trade-off between them |
+| Agent approach | Adapt the Triton AI Compiler with its purpose reversed: it searched for speed among candidates that were already correct within tolerance, while this agent searches for bit equality first. Candidates are scored by closeness to the reference (fraction of identical values and difference in representable steps) until one is bit-exact, then by speed. The agent starts from native AMD Triton's code (LLVM IR or assembly) and repairs it |
+| Primary metric | Portability cost. For the agent, first whether it found a valid candidate and how close its best candidate came, then the latency of its fastest valid candidate against the emulation baseline |
 | Verdict | Zero tolerance, compared as raw bytes. Signed zero counts, and NaN payloads count unless the reference GPU itself does not repeat them |
 | Near-misses | Invalid candidates are logged and plotted with latency, mismatch rate, and difference in representable steps, plus how many fall within 1e-7 and 1e-6 on FP32 outputs |
 | Reference | A pinned A100 Triton capture, which must repeat bit for bit on A100 |
@@ -30,7 +31,7 @@ Three outcomes count as answers:
 | Autotuning the reference | Reject a config only if it fails to run. Pick the lowest median latency among the rest, and record every config's latency and output hash. No tolerance filter |
 | Candidate freedom | Any tile order or warp layout |
 | Portability cost denominator | Autotuned native AMD Triton as the headline, with the reference's forced config as a secondary number |
-| Baseline | A deterministic emulation baseline, then the agent on top. The user writes the first probe, and we pair on the rest |
+| Baseline | A hand-written emulation baseline: an MI210 kernel, written without an LLM, that reproduces A100's order of operations and subnormal handling. It shows matching is possible, sets the speed bar, and is how the user learns the low-level work. It comes before the agent (confirmed 2026-11-24). The user writes the first probe, and we pair on the rest |
 | Code level | LLVM IR with inline assembly, and whole-kernel GFX90A assembly only if a measured bottleneck requires it. A separate learning lab covers whole-kernel assembly and stays out of the results |
 | Agent | See [ADR 0002](adr/0002-restricted-claude-code-agent.md) |
 | Container | The agent runs inside it, with no `$HOME` or `/vast`, one bound run directory, API-only network if possible, a dedicated token, per-candidate timeouts, and a whole exclusive node. A breakout test must fail before any agent runs |
