@@ -28,6 +28,7 @@ from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKClient,
+    RateLimitEvent,
     ResultMessage,
     SystemMessage,
     TextBlock,
@@ -42,6 +43,7 @@ from taic_amd.verifier import summary, verify
 
 SERVER_NAME = "taic"
 MAX_LINES_PER_READ = 400
+DEFAULT_LIMIT_WAIT = 30 * 60
 
 
 def detail(report):
@@ -178,6 +180,7 @@ def parse_args():
     parser.add_argument("--stage", default="llir", choices=("llir", "amdgcn"))
     parser.add_argument("--hours", type=float, default=12.0)
     parser.add_argument("--max-turns", type=int)
+    parser.add_argument("--max-sessions", type=int, default=20)
     parser.add_argument("--model", default="claude-opus-5-5")
     parser.add_argument("--effort", default="high")
     parser.add_argument("--verify-timeout", type=int, default=600)
@@ -185,11 +188,31 @@ def parse_args():
     return parser.parse_args()
 
 
-async def run_agent(session, args, native_summary):
+class Clock:
+    """Active time: wall time minus the time spent waiting out usage limits."""
+
+    def __init__(self, hours):
+        self.budget = hours * 3600
+        self.started = time.monotonic()
+        self.paused = 0.0
+
+    def active(self):
+        return time.monotonic() - self.started - self.paused
+
+    def remaining(self):
+        return self.budget - self.active()
+
+    async def pause_until(self, resets_at):
+        began = time.monotonic()
+        await asyncio.sleep(max(60.0, resets_at - time.time() + 60.0))
+        self.paused += time.monotonic() - began
+
+
+def agent_options(session, args, resume):
     env = {}
     if os.environ.get("TAIC_CLAUDE_CONFIG_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.environ["TAIC_CLAUDE_CONFIG_DIR"]
-    options = ClaudeAgentOptions(
+    return ClaudeAgentOptions(
         tools=[],
         mcp_servers={SERVER_NAME: build_server(session)},
         allowed_tools=[f"mcp__{SERVER_NAME}__*"],
@@ -201,26 +224,40 @@ async def run_agent(session, args, native_summary):
         max_turns=args.max_turns,
         cwd=str(session.run_dir),
         env=env,
+        resume=resume,
     )
-    prompt = task_prompt(
-        KERNELS[args.kernel], session.config, args.stage, session.candidate_name,
-        native_summary, len(session.current.splitlines()),
-    )  # fmt: skip
-    deadline = time.monotonic() + args.hours * 3600
+
+
+async def run_one_session(session, options, prompt, clock):
+    """Run the agent until it ends its turn, hits a usage limit, or runs out of time.
+
+    Returns (outcome, session_id, resets_at), outcome being "ended", "rate_limited",
+    "time", or "error".
+    """
+    outcome, session_id, resets_at = "ended", options.resume, None
     async with ClaudeSDKClient(options=options) as client:
 
-        async def stop_at_deadline():
-            await asyncio.sleep(max(0.0, deadline - time.monotonic()))
-            session.log("time_limit_reached", hours=args.hours)
+        async def stop_when_out_of_time():
+            nonlocal outcome
+            while clock.remaining() > 0:
+                await asyncio.sleep(min(30.0, max(1.0, clock.remaining())))
+            outcome = "time"
+            session.log("time_limit_reached", active_seconds=clock.active())
             await client.interrupt()
 
-        watchdog = asyncio.create_task(stop_at_deadline())
+        watchdog = asyncio.create_task(stop_when_out_of_time())
         try:
             await client.query(prompt)
             async for message in client.receive_response():
                 if isinstance(message, SystemMessage) and message.subtype == "init":
                     session.log("init", tools=message.data.get("tools"),
                                 model=message.data.get("model"))  # fmt: skip
+                elif isinstance(message, RateLimitEvent):
+                    info = message.rate_limit_info
+                    session.log("rate_limit", status=info.status, resets_at=info.resets_at,
+                                window=info.rate_limit_type, utilization=info.utilization)  # fmt: skip
+                    if info.status == "rejected":
+                        outcome, resets_at = "rate_limited", info.resets_at
                 elif isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, TextBlock):
@@ -228,16 +265,56 @@ async def run_agent(session, args, native_summary):
                         elif isinstance(block, ToolUseBlock):
                             session.log("tool_use", name=block.name,
                                         input=json.dumps(block.input)[:2000])  # fmt: skip
-                    if message.error:
+                    if message.error == "rate_limit" and outcome != "time":
+                        outcome = "rate_limited"
+                    elif message.error:
                         session.log("assistant_error", error=message.error)
                 elif isinstance(message, ResultMessage):
+                    session_id = message.session_id
                     session.log(
                         "result", subtype=message.subtype, is_error=message.is_error,
                         num_turns=message.num_turns, duration_ms=message.duration_ms,
                         duration_api_ms=message.duration_api_ms, session_id=message.session_id,
                     )  # fmt: skip
+                    if message.is_error and outcome == "ended":
+                        outcome = "error"
         finally:
             watchdog.cancel()
+    return outcome, session_id, resets_at
+
+
+async def run_agent(session, args, native_summary, clock):
+    prompt = task_prompt(
+        KERNELS[args.kernel], session.config, args.stage, session.candidate_name,
+        native_summary, len(session.current.splitlines()),
+    )  # fmt: skip
+    resume = None
+    for number in range(args.max_sessions):
+        if clock.remaining() <= 0:
+            break
+        session.log("session_start", number=number, resume=resume,
+                    active_seconds=clock.active())  # fmt: skip
+        options = agent_options(session, args, resume)
+        outcome, resume, resets_at = await run_one_session(
+            session, options, prompt, clock
+        )
+        session.log("session_end", number=number, outcome=outcome)
+        if outcome in ("time", "error"):
+            return outcome
+        if outcome == "rate_limited":
+            wait_until = resets_at or time.time() + DEFAULT_LIMIT_WAIT
+            session.log("pause", until=wait_until)
+            await clock.pause_until(wait_until)
+            prompt = "The usage limit has reset. Continue from where you stopped."
+            continue
+        best = session.verified.get(session.best_id)
+        prompt = (
+            "You ended your turn, but time remains. The best candidate so far is "
+            f"{session.best_id}: {summary(best[1]) if best else 'none verified yet'}. "
+            "If no candidate is exact yet, keep working toward an exact match. If one "
+            "is exact, make it faster while keeping it exact."
+        )
+    return "sessions_exhausted"
 
 
 def main():
@@ -261,16 +338,20 @@ def main():
     session.log("start", sdk=claude_agent_sdk.__version__, kernel=args.kernel, capture=manifest["name"], stage=args.stage,
                 model=args.model, effort=args.effort, hours=args.hours,
                 dry_run=args.dry_run, native=summary(native))  # fmt: skip
-    started = time.monotonic()
+    clock = Clock(args.hours)
+    stopped = "dry_run"
     if args.dry_run:
         print(session.read(1, 5))
         print(session.verify())
     else:
-        asyncio.run(run_agent(session, args, detail(native)))
+        stopped = asyncio.run(run_agent(session, args, detail(native), clock))
     best = session.verified.get(session.best_id)
     result = {
         "run_dir": str(run_dir),
-        "wall_seconds": time.monotonic() - started,
+        "stopped": stopped,
+        "active_seconds": clock.active(),
+        "paused_seconds": clock.paused,
+        "wall_seconds": clock.active() + clock.paused,
         "verified_candidates": len(session.verified),
         "best_candidate": session.best_id,
         "best_summary": summary(best[1]) if best else None,
