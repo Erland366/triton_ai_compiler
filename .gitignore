@@ -34,3 +34,4 @@ matmul/direct_cutlass_kernel_fp16
 /containers/*.sif.partial
 /captures/
 /lab/work/
+/runs/

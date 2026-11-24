@@ -1,0 +1,3 @@
+# Agent loop dependencies (taic_amd/agent.py), on top of amd/requirements-rocm.txt.
+# This SDK release bundles its own Claude Code binary; record that version in each run.
+claude-agent-sdk==0.2.188
