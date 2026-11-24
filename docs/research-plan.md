@@ -33,7 +33,7 @@ Three outcomes count as answers:
 | Portability cost denominator | Autotuned native AMD Triton as the headline, with the reference's forced config as a secondary number |
 | Baseline | A hand-written emulation baseline: an MI210 kernel, written without an LLM, that reproduces A100's order of operations and subnormal handling. It shows matching is possible, sets the speed bar, and is how the user learns the low-level work. It comes before the agent (confirmed 2026-11-24). The user writes the first probe, and we pair on the rest |
 | Code level | LLVM IR with inline assembly, and whole-kernel GFX90A assembly only if a measured bottleneck requires it. A separate learning lab covers whole-kernel assembly and stays out of the results |
-| Agent | See [ADR 0002](adr/0002-restricted-claude-code-agent.md) |
+| Agent | As GEAK does it: Python drives Claude Code through the Agent SDK, with `claude -p` as fallback, on the user's subscription login. Unlike GEAK, the agent has only our verifier and patch tools and runs in a container. See [ADR 0002](adr/0002-restricted-claude-code-agent.md) |
 | Container | The agent runs inside it, with no `$HOME` or `/vast`, one bound run directory, API-only network if possible, a dedicated token, per-candidate timeouts, and a whole exclusive node. A breakout test must fail before any agent runs |
 | Agent budget | 12 active hours per kernel, excluding rate-limit pauses but logging both, with 3 runs per kernel and one pinned model and Claude Code version. The 12 hours is an estimate to correct after the pilot |
 | Stop rule | Two weeks of work after the first accepted A100 capture, then preserve the result and let the user decide |
