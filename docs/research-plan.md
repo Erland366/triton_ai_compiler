@@ -31,27 +31,27 @@ Three outcomes count as answers:
 | Autotuning the reference | Reject a config only if it fails to run. Pick the lowest median latency among the rest, and record every config's latency and output hash. No tolerance filter |
 | Candidate freedom | Any tile order or warp layout |
 | Portability cost denominator | Autotuned native AMD Triton as the headline, with the reference's forced config as a secondary number |
-| Baseline | A hand-written emulation baseline: an MI210 kernel, written without an LLM, that reproduces A100's order of operations and subnormal handling. It shows matching is possible, sets the speed bar, and is how the user learns the low-level work. It comes before the agent (confirmed 2026-11-24). The user writes the first probe, and we pair on the rest |
+| Baseline | A hand-written emulation baseline: an MI210 kernel, written without an LLM, that reproduces A100's order of operations and subnormal handling. It is the human comparison for the agent, which is the main method, and how the user learns the low-level work. Its findings feed the agent's prompts as they come (2026-11-24). The user writes the first probe, and we pair on the rest |
 | Code level | LLVM IR with inline assembly, and whole-kernel GFX90A assembly only if a measured bottleneck requires it. A separate learning lab covers whole-kernel assembly and stays out of the results |
 | Agent | As GEAK does it: Python drives Claude Code through the Agent SDK, with `claude -p` as fallback, on the user's subscription login. Unlike GEAK, the agent has only our verifier and patch tools and runs in a container. See [ADR 0002](adr/0002-restricted-claude-code-agent.md) |
 | Container | The agent runs inside it, with no `$HOME` or `/vast`, one bound run directory, API-only network if possible, a dedicated token, per-candidate timeouts, and a whole exclusive node. A breakout test must fail before any agent runs |
 | Agent budget | 12 active hours per kernel, excluding rate-limit pauses but logging both, with 3 runs per kernel and one pinned model and Claude Code version. The 12 hours is an estimate to correct after the pilot |
-| Stop rule | Two weeks of work after the first accepted A100 capture, then preserve the result and let the user decide |
+| Stop rule | Two weeks of agent runs on MatMul, starting at the first agent pilot the user approves. If no bit-exact MatMul kernel exists by then, preserve the results and let the user decide. Revised 2026-11-24 from a limit on the hand-written baseline; the user accepted it with reservations, so it may be revisited |
 | Code location | This repo. Existing `ptx_gym` kernel files stay untouched |
 
 The input counts, the 12 hours, and the two weeks are judgment calls with no measurement behind them yet.
 
 ## Order of work
 
-The user approves steps 3, 4, and 7 before they run.
+The user approves steps 3, 4, and 7 before they run. Steps 1 to 4 are done.
 
 1. Establish code injection on AMD and pin a ROCm environment on MI210. Done on 2026-11-06 with no Triton patch: `amd/check_injection.py` injects at the `llir` and `amdgcn` stages through `TRITON_KERNEL_OVERRIDE`, on one small kernel. Candidate runs must set `TRITON_ALWAYS_COMPILE=1`, because the default cache returned a stale kernel after a file was edited.
 2. Write the BF16 kernels as standalone files in `bf16_kernels/`, using stock Triton 3.6.0 on A100 and `triton-rocm` 3.6.0 on MI210. PTX Gym's patched Triton is not used. Written on 2026-11-06 and sanity-checked on MI210 only with `amd/check_bf16_kernels.py`, not yet on A100.
 3. Capture test inputs and references on A100 through a Slurm job, then repeat on H200 in its container. Move captures through the Mac with `sha256sum` checks.
 4. Measure native AMD against the references.
-5. Do the learning lab, then the emulation baseline. The stop rule applies here.
-6. Build the agent container and try to break out of it.
-7. Run the agents.
+5. In parallel (decided 2026-11-24): the agent pipeline is built (the Triton AI Compiler's loop adapted to AMD, the bit-comparison verifier as its tool, and the container), while the user works through the learning lab, then the probe and the emulation baseline. Findings from the hand-written work go into the agent's prompts.
+6. Try to break out of the agent container before any agent runs.
+7. Run the agents, starting with a MatMul pilot the user approves. The stop rule starts there.
 
 ## Parked
 
