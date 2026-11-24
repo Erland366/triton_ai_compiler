@@ -35,7 +35,7 @@ Three outcomes count as answers:
 | Code level | LLVM IR with inline assembly, and whole-kernel GFX90A assembly only if a measured bottleneck requires it. A separate learning lab covers whole-kernel assembly and stays out of the results |
 | Agent | As GEAK does it: Python drives Claude Code through the Agent SDK, with `claude -p` as fallback, on the user's subscription login. Unlike GEAK, the agent has only our verifier and patch tools and runs in a container. See [ADR 0002](adr/0002-restricted-claude-code-agent.md) |
 | Container | The agent runs inside it, with no `$HOME` or `/vast`, one bound run directory, API-only network if possible, a dedicated token, per-candidate timeouts, and a whole exclusive node. A breakout test must fail before any agent runs |
-| Agent budget | 12 active hours per kernel, excluding rate-limit pauses but logging both, with 3 runs per kernel and one pinned model and Claude Code version. The 12 hours is an estimate to correct after the pilot |
+| Agent budget | 12 active hours per kernel, excluding rate-limit pauses but logging both, with 3 runs per kernel and one pinned model (`claude-opus-5-5`, chosen 2026-11-24) and Claude Code version. The 12 hours is an estimate to correct after the pilot |
 | Stop rule | Two weeks of agent runs on MatMul, starting at the first agent pilot the user approves. If no bit-exact MatMul kernel exists by then, preserve the results and let the user decide. Revised 2026-11-24 from a limit on the hand-written baseline; the user accepted it with reservations, so it may be revisited |
 | Code location | This repo. Existing `ptx_gym` kernel files stay untouched |
 
