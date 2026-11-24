@@ -42,6 +42,10 @@ from taic_amd.prompts import SYSTEM_PROMPT, task_prompt
 from taic_amd.verifier import summary, verify
 
 SERVER_NAME = "taic"
+ALLOWED_TOOLS = tuple(
+    f"mcp__{SERVER_NAME}__{name}"
+    for name in ("read_candidate", "apply_patch", "verify", "reset")
+)
 MAX_LINES_PER_READ = 400
 DEFAULT_LIMIT_WAIT = 30 * 60
 
@@ -215,6 +219,7 @@ def agent_options(session, args, resume):
     return ClaudeAgentOptions(
         tools=[],
         mcp_servers={SERVER_NAME: build_server(session)},
+        strict_mcp_config=True,
         allowed_tools=[f"mcp__{SERVER_NAME}__*"],
         permission_mode="dontAsk",
         setting_sources=[],
@@ -250,8 +255,15 @@ async def run_one_session(session, options, prompt, clock):
             await client.query(prompt)
             async for message in client.receive_response():
                 if isinstance(message, SystemMessage) and message.subtype == "init":
-                    session.log("init", tools=message.data.get("tools"),
-                                model=message.data.get("model"))  # fmt: skip
+                    tools = message.data.get("tools") or []
+                    session.log("init", tools=tools, model=message.data.get("model"))
+                    unexpected = sorted(set(tools) - set(ALLOWED_TOOLS))
+                    if unexpected:
+                        session.log("unexpected_tools", tools=unexpected)
+                        await client.interrupt()
+                        raise RuntimeError(
+                            f"The agent was given tools beyond its own: {unexpected}"
+                        )
                 elif isinstance(message, RateLimitEvent):
                     info = message.rate_limit_info
                     session.log("rate_limit", status=info.status, resets_at=info.resets_at,
