@@ -32,6 +32,7 @@ from claude_agent_sdk import (
     ResultMessage,
     SystemMessage,
     TextBlock,
+    ThinkingBlock,
     ToolUseBlock,
     create_sdk_mcp_server,
     tool,
@@ -226,6 +227,7 @@ def agent_options(session, args, resume):
         system_prompt=SYSTEM_PROMPT,
         model=args.model,
         effort=args.effort,
+        thinking={"type": "adaptive", "display": "summarized"},
         max_turns=args.max_turns,
         cwd=str(session.run_dir),
         env=env,
@@ -274,6 +276,8 @@ async def run_one_session(session, options, prompt, clock):
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             session.log("text", text=block.text[:4000])
+                        elif isinstance(block, ThinkingBlock):
+                            session.log("thinking", text=block.thinking[:4000])
                         elif isinstance(block, ToolUseBlock):
                             session.log("tool_use", name=block.name,
                                         input=json.dumps(block.input)[:2000])  # fmt: skip
