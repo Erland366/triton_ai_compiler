@@ -15,6 +15,7 @@ set -euo pipefail
 run_dir="$(realpath "$1")" login_dir="$(realpath "$2")"; shift 2
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 sif="$repo/containers/agent-rocm.sif"
+[[ -f /opt/amdgpu/share/libdrm/amdgpu.ids ]] || { echo "error: /opt/amdgpu/share/libdrm/amdgpu.ids not found on the host" >&2; exit 1; }
 [[ -f "$sif" ]] || { echo "error: $sif not found; run containers/build-agent.sh" >&2; exit 1; }
 [[ -d "$run_dir" && -d "$login_dir" ]] || { echo "error: RUN_DIR and LOGIN_DIR must exist" >&2; exit 1; }
 [[ "${HIP_VISIBLE_DEVICES:-}" =~ ^[0-9]+$ ]] || { echo "error: set HIP_VISIBLE_DEVICES to one GPU index" >&2; exit 1; }
@@ -22,6 +23,7 @@ case "$run_dir/" in "$repo"/*) echo "error: RUN_DIR must be outside the reposito
 
 exec apptainer exec --rocm --containall --no-mount home,cwd \
   --bind "$repo:/repo:ro" --bind "$run_dir:/runs" --bind "$login_dir:/login" \
+  --bind "/opt/amdgpu/share/libdrm/amdgpu.ids:/opt/amdgpu/share/libdrm/amdgpu.ids:ro" \
   --pwd /repo \
   --env "PYTHONPATH=/repo" \
   --env "HIP_VISIBLE_DEVICES=$HIP_VISIBLE_DEVICES" \

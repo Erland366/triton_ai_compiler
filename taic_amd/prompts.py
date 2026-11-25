@@ -20,6 +20,9 @@ layout; change how it computes.
 - `read_candidate` shows numbered lines of the current candidate.
 - `apply_patch` applies a unified diff to the current candidate. The diff headers must
   name the candidate file exactly, as given in the task.
+- `quick_check` runs the current candidate on four development inputs, once each, in
+  about a tenth of the time of `verify`. Use it to try ideas. It never marks a
+  candidate exact and does not count as a verified candidate.
 - `verify` compiles and runs the current candidate on the MI210 and compares it with
   the A100 reference. It reports, for each visible input, the fraction of output
   values that are bit-equal, the fraction within one representable step, and the
@@ -27,7 +30,8 @@ layout; change how it computes.
   A candidate whose output changes between two launches does not count.
 - `reset` returns the current candidate to an earlier verified one.
 
-Verify after every meaningful change, and build on the closest candidate so far.
+Use `quick_check` to explore and `verify` to record a candidate worth keeping. Build
+on the closest verified candidate so far.
 When a change makes things worse, reset and try something else. Never try to detect
 or special-case particular inputs: the sealed inputs exist to catch that.
 

@@ -7,6 +7,8 @@ or hang cannot take the caller down. Writes a JSON report to --out.
 
 Visible inputs (development and special) get full detail. Sealed inputs only report
 whether all of them matched. Latency is measured only for a bit-exact candidate.
+With --quick, only four development inputs run, once each, with no sealed inputs and
+no latency: a fast check for trying ideas, which can never mark a candidate exact.
 
     python -m taic_amd.evaluate --kernel K --candidate kernel.llir \
         --capture captures/a100-ref-1 --out report.json
@@ -41,6 +43,8 @@ from capture.run import raw_bytes, to_device
 STAGES = ("llir", "amdgcn")
 VISIBLE_SETS = ("development", "special")
 LAUNCHES_PER_INPUT = 2
+# A quick check: one random and three adversarial development inputs, launched once.
+QUICK_INPUTS = tuple(f"development_{index:02d}_" for index in (0, 8, 10, 15))
 
 
 def parse_args():
@@ -53,6 +57,7 @@ def parse_args():
     parser.add_argument("--config", type=json.loads)
     parser.add_argument("--role", default="tuned", choices=("tuned", "held_out"))
     parser.add_argument("--dump-native", type=Path)
+    parser.add_argument("--quick", action="store_true")
     parser.add_argument("--out", type=Path, required=True)
     return parser.parse_args()
 
@@ -91,13 +96,13 @@ def inject(kernel, source_dir, candidate):
     return stage, text
 
 
-def score(kernel, reference, capture_dir, inputs):
+def score(kernel, reference, capture_dir, inputs, launches):
     by_name = {output["name"]: output for output in reference["outputs"]}
     visible, sealed_all_equal, repeats = [], True, True
     for name, input_set, cpu_inputs in inputs:
         expected = by_name[name]
         first = raw_bytes(launch(kernel, cpu_inputs))
-        for _ in range(LAUNCHES_PER_INPUT - 1):
+        for _ in range(launches - 1):
             repeats &= raw_bytes(launch(kernel, cpu_inputs)) == first
         if input_set not in VISIBLE_SETS:
             sealed_all_equal &= (
@@ -149,9 +154,24 @@ def evaluate(args):
         compiled = kernel.last_launch.asm[stage]
         if compiled.strip() != text.strip():
             raise RuntimeError("Triton did not use the candidate; the override failed.")
+    if args.quick:
+        inputs = [entry for entry in inputs if entry[0].startswith(QUICK_INPUTS)]
+        report.update(
+            score(kernel, reference, args.capture / args.kernel / args.role, inputs, 1)
+        )
+        report.update(quick=True, exact=False, repeats=None, sealed_all_equal=None)
+        report["status"] = "ok"
+        return report
     report.update(
-        score(kernel, reference, args.capture / args.kernel / args.role, inputs)
+        score(
+            kernel,
+            reference,
+            args.capture / args.kernel / args.role,
+            inputs,
+            LAUNCHES_PER_INPUT,
+        )
     )
+    report["quick"] = False
     report["exact"] = (
         report["repeats"]
         and report["sealed_all_equal"]

@@ -18,7 +18,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 
 
-def verify(kernel, capture, candidate=None, config=None, dump_native=None, timeout=600):
+def verify(
+    kernel,
+    capture,
+    candidate=None,
+    config=None,
+    dump_native=None,
+    timeout=600,
+    quick=False,
+):
     with tempfile.TemporaryDirectory(prefix="taic_verify_") as directory:
         out = Path(directory) / "report.json"
         command = [
@@ -31,6 +39,8 @@ def verify(kernel, capture, candidate=None, config=None, dump_native=None, timeo
             command += ["--config", json.dumps(config)]
         if dump_native is not None:
             command += ["--dump-native", str(dump_native)]
+        if quick:
+            command.append("--quick")
         env = dict(os.environ, PYTHONPATH=str(REPO))
         try:
             completed = subprocess.run(
@@ -43,9 +53,23 @@ def verify(kernel, capture, candidate=None, config=None, dump_native=None, timeo
             return {
                 "status": "crashed",
                 "error": f"Exit code {completed.returncode}.",
-                "stderr": completed.stderr[-4000:],
+                "stderr": without_noise(completed.stderr)[-4000:],
             }
         return json.loads(out.read_text())
+
+
+def without_noise(text):
+    """Drop libdrm's warning about a missing GPU names file, which carries no signal."""
+    return "\n".join(line for line in text.splitlines() if "amdgpu.ids" not in line)
+
+
+def visible_line(visible):
+    return (
+        f"visible: {visible['exact_inputs']}/{visible['inputs']} inputs exact, "
+        f"{visible['bit_equal_fraction']:.4%} of values bit-equal, "
+        f"{visible['within_1_step_fraction']:.4%} within 1 step, "
+        f"max {visible['max_steps']} steps"
+    )
 
 
 def summary(report):
@@ -53,14 +77,12 @@ def summary(report):
         detail = report.get("traceback") or report.get("stderr") or ""
         tail = "\n".join(detail.strip().splitlines()[-6:])
         return f"{report['status']}: {report.get('error')}\n{tail}".rstrip()
-    visible = report["visible"]
+    if report.get("quick"):
+        return f"quick check, not a verification | {visible_line(report['visible'])}"
     line = (
         f"exact={report['exact']} repeats={report['repeats']} "
-        f"sealed_all_equal={report['sealed_all_equal']} | visible: "
-        f"{visible['exact_inputs']}/{visible['inputs']} inputs exact, "
-        f"{visible['bit_equal_fraction']:.4%} of values bit-equal, "
-        f"{visible['within_1_step_fraction']:.4%} within 1 step, "
-        f"max {visible['max_steps']} steps"
+        f"sealed_all_equal={report['sealed_all_equal']} | "
+        f"{visible_line(report['visible'])}"
     )
     if "latency_ms" in report:
         line += f" | latency {report['latency_ms']:.4f} ms"
@@ -74,6 +96,7 @@ def main():
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--config", type=json.loads)
     parser.add_argument("--dump-native", type=Path)
+    parser.add_argument("--quick", action="store_true")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
@@ -84,6 +107,7 @@ def main():
         args.config,
         args.dump_native.resolve() if args.dump_native else None,
         args.timeout,
+        args.quick,
     )
     print(json.dumps(report, indent=2) if args.json else summary(report))
     return 0 if report["status"] == "ok" else 1

@@ -45,7 +45,7 @@ from taic_amd.verifier import summary, verify
 SERVER_NAME = "taic"
 ALLOWED_TOOLS = tuple(
     f"mcp__{SERVER_NAME}__{name}"
-    for name in ("read_candidate", "apply_patch", "verify", "reset")
+    for name in ("read_candidate", "apply_patch", "quick_check", "verify", "reset")
 )
 MAX_LINES_PER_READ = 400
 DEFAULT_LIMIT_WAIT = 30 * 60
@@ -136,6 +136,22 @@ class Session:
         self.log("verify", candidate=candidate_id, summary=summary(report))
         return f"Candidate {candidate_id}: {detail(report)}\nBest so far: candidate {self.best_id}."
 
+    def quick_check(self):
+        number = (
+            sum(1 for _ in (self.run_dir / "quick").glob("*.json"))
+            if (self.run_dir / "quick").exists()
+            else 0
+        )
+        path = self.run_dir / "quick" / f"{number:03d}.{self.stage}"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(self.current)
+        report = verify(
+            self.kernel, self.capture, candidate=path, timeout=self.timeout, quick=True
+        )
+        path.with_suffix(".json").write_text(json.dumps(report, indent=2) + "\n")
+        self.log("quick_check", number=number, summary=summary(report))
+        return f"Quick check {number}: {detail(report)}"
+
     def reset(self, candidate_id):
         if candidate_id not in self.verified:
             raise ValueError(
@@ -167,6 +183,8 @@ def build_server(session):
             text_result(lambda a: session.read(a["start_line"], a["end_line"]))),
         tool("apply_patch", "Apply a unified diff to the current candidate.", {"patch": str})(
             text_result(lambda a: session.apply_patch(a["patch"]))),
+        tool("quick_check", "Fast check of the current candidate on four inputs; never counts as exact.", {})(
+            text_result(lambda a: session.quick_check())),
         tool("verify", "Compile, run, and compare the current candidate with A100.", {})(
             text_result(lambda a: session.verify())),
         tool("reset", "Make an earlier verified candidate current again.", {"candidate_id": int})(
