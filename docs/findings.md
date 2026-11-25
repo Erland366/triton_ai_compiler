@@ -111,3 +111,19 @@ Of the hour, 75% went to verification (22 runs, about 2 minutes each, since the 
 This is a plumbing check and one run of one model, so it says nothing yet about how well the method works.
 
 Evidence: `/vast/users/qirong.ho/erland/taic_runs/pilot-1h/20261124T131053Z_MatrixMultiplicationBF16OutputFloat32/` (untracked), code at commit `50997ef`, against `captures/a100-ref-381110`.
+
+## F9: The second pilot found a bit-exact MatMul kernel (2026-11-25)
+
+The second one-hour pilot (same setup as F8, plus the `quick_check` tool and logged reasoning, on GPU 1) produced a candidate that matches A100 exactly: every bit of every visible and sealed test input of MatMul with FP32 output at K=4096, repeating across launches. An independent re-verification on GPU 2 gave the same result. It was found 57.4 minutes into the hour, leaving no time to make it faster.
+
+| | Native MI210 Triton | Exact candidate |
+|---|---|---|
+| Visible values bit-equal | 11.94% | 100% |
+| Sealed inputs | differ | all equal |
+| Latency | 1.26 ms autotuned (1.59 ms at A100's config) | 195.8 ms, about 156 times slower |
+
+The candidate encodes, in LLVM IR written from scratch by the agent, a model of how A100's BF16 tensor cores accumulate (read from the code, not documented anywhere we found): along K, the products are added in groups of 8; each group is aligned to its largest exponent with 24 bits of precision and added in fixed point; after each group the sum is rounded toward zero to FP32; exponents are clamped to FP32's normal range. The agent reached it by testing hypotheses against the reference, using 64 quick checks, 61 patches and 3 full verifications.
+
+Limits: one run of one model and prompt; tested only on the test inputs (16 development, 16 sealed, 2 special) at one shape; not yet tested on the held-out K=1024 shape; the candidate is far slower than native, so portability cost is not yet meaningful.
+
+Evidence: `/vast/users/qirong.ho/erland/taic_runs/pilot2-1h/20261125T060330Z_MatrixMultiplicationBF16OutputFloat32/candidates/002.llir` (sha256 prefix `be985ef326923b9d`, untracked), code at commit `111a195`, against `captures/a100-ref-381110`.
