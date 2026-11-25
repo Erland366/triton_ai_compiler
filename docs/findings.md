@@ -127,3 +127,13 @@ The candidate encodes, in LLVM IR written from scratch by the agent, a model of 
 Limits: one run of one model and prompt; tested only on the test inputs (16 development, 16 sealed, 2 special) at one shape; not yet tested on the held-out K=1024 shape; the candidate is far slower than native, so portability cost is not yet meaningful.
 
 Evidence: `/vast/users/qirong.ho/erland/taic_runs/pilot2-1h/20261125T060330Z_MatrixMultiplicationBF16OutputFloat32/candidates/002.llir` (sha256 prefix `be985ef326923b9d`, untracked), code at commit `111a195`, against `captures/a100-ref-381110`.
+
+## F10: The exact kernel's model also holds at the held-out shape K=1024 (2026-11-25)
+
+The F9 kernel was ported by hand to K=1024 by changing only its three shape-dependent lines: A's row offset (m x 1024 instead of m x 4096), a separate row offset for C (still m x 4096, where the original reused A's because both were 4096), and the end of the K loop (1024 instead of 4096). Its arithmetic, including the grouping, 24-bit alignment, rounding toward zero and exponent clamping, was not touched.
+
+Against capture `a100-ref-388901` (K=1024, its own inputs from different seeds, never seen by the agent or used to build the kernel), the ported kernel is exact: every bit of all 18 visible inputs and all sealed inputs, repeating across launches, at 48.9 ms (native MI210 Triton at K=1024 matches 17.8% of visible values).
+
+So the model of A100's tensor-core accumulation that the agent found generalizes beyond the shape and inputs it was developed on. This tests the kernel, not the agent: the agent has not yet been run at K=1024.
+
+Evidence: `/vast/users/qirong.ho/erland/taic_runs/k1024-port/exact_k1024.llir` (sha256 prefix `bb0e3b3b7bddb3f0`, untracked; `diff` against `exact_k4096.llir` in the same folder shows the three lines), verified on `auh7-1b-gpu-240` GPU 2 with `taic_amd/verifier.py` at commit `110b240`.
