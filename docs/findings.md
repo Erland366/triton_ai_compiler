@@ -89,3 +89,25 @@ Capture `a100-ref-388901` holds both MatMul kernels at K=1024 (M=N=4096). On A10
 The halfway cases still match exactly, and the `tiny` case still differs almost everywhere (0.44% with BF16 output, 0% with FP32), as subnormal flushing (F5, F6) predicts. A shorter sum gives fewer chances for the two accumulation orders to round differently, which fits the higher agreement.
 
 Evidence: capture job 388901 (`gpu-53`, GPU 2, commit `13e59c4`), checksums and input regeneration verified on MI210; `capture/compare.py` at commit `17f3a8d` on `auh7-1b-gpu-296` (job 354563, GPU 0), output `logs/compare_mi210_vs_a100-ref-388901.json` (untracked).
+
+## F8: First agent pilot, one active hour on MatMul with FP32 output (2026-11-24)
+
+The correctness-first agent (`taic_amd/agent.py`, Claude Opus 5.5 at effort high, in the agent container) ran for one active hour from native AMD Triton's LLVM IR. It found no exact candidate. Its best, candidate 21 of 22, doubled the share of visible values that match A100:
+
+| Input | Native | Best candidate |
+|---|---|---|
+| Random (8 inputs) | 0.36% | 6.54% (17.9% within 1 step) |
+| Cancelling large values | 0% | 99.57% |
+| Zeros and smallest normals | 5.36% | 33.95% |
+| Tiny values (subnormal products) | 0% | 6.50% |
+| Halfway cases | 100% | 100% |
+| Special: NaN, infinity | 0%, 3.31% | 0%, 0.002% |
+| All visible inputs | 11.94% | 23.50% |
+
+Unprompted, the agent replaced the kernel with its own model of A100's tensor cores: each group of 16 products is aligned to the largest exponent among them and the running sum, converted to integers, and added in fixed point. The near-exact cancelling case is some evidence for that model, since cancellation magnifies differences in how sums are formed; this is an inference, not a confirmed finding.
+
+Of the hour, 75% went to verification (22 runs, about 2 minutes each, since the agent's kernel is slow scalar code), 2 candidates crashed on syntax errors in patches, and no usage limit was hit. Its reasoning was not logged, because Opus 5.5 omits thinking by default.
+
+This is a plumbing check and one run of one model, so it says nothing yet about how well the method works.
+
+Evidence: `/vast/users/qirong.ho/erland/taic_runs/pilot-1h/20261124T131053Z_MatrixMultiplicationBF16OutputFloat32/` (untracked), code at commit `50997ef`, against `captures/a100-ref-381110`.
